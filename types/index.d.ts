@@ -47,6 +47,71 @@ export type ExecutorRun = {
 /** A dispatch seen at `agent.spawn` whose agent id is not known yet. */
 export type PendingRun = Omit<ExecutorRun, 'id'>
 
+export type PlanStepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'over'
+export type SnapshotPlanStep = {
+  /** 1-based step number, as in `[budget: Nm step: k]`. */
+  k: number
+  title: string
+  minutes: number
+  status: PlanStepStatus
+  agentId?: string
+  startedAt?: number
+  endedAt?: number
+}
+export type AgentEntryStatus = 'running' | 'done' | 'failed' | 'stopped' | 'idle'
+export type SnapshotAgent = {
+  id: string
+  description: string
+  type: string
+  status: AgentEntryStatus
+  startedAt: number
+  endedAt?: number
+  budgetMin?: number
+  step?: number
+}
+export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped'
+export type SnapshotShell = {
+  id: string
+  command: string
+  description: string
+  status: ShellStatus
+  startedAt: number
+  endedAt?: number
+  exitCode?: number
+}
+export type SnapshotFile = { path: string; op: 'edit' | 'write'; count: number; lastAt: number }
+export type SnapshotToolEntry = { at: number; tool: string; summary: string; agentId?: string; ok: boolean }
+export type UserTaskStatus = 'todo' | 'doing' | 'blocked' | 'done'
+export type UserTaskPriority = 'low' | 'med' | 'high'
+export type UserTask = {
+  id: string
+  title: string
+  notes: string
+  status: UserTaskStatus
+  priority: UserTaskPriority
+  createdAt: number
+  updatedAt: number
+  source: 'user' | 'plan'
+}
+/** The session dashboard's whole state; the web app reads exactly this shape. */
+export type Snapshot = {
+  session: { id: string; cwd: string; startedAt: number }
+  orchestrate: boolean
+  progress: { task: string; step: number; totalSteps: number; label: string; done: boolean } | null
+  plan: { task: string; steps: SnapshotPlanStep[] } | null
+  agents: SnapshotAgent[]
+  shells: SnapshotShell[]
+  files: SnapshotFile[]
+  /** Newest last, at most 200. */
+  toolLog: SnapshotToolEntry[]
+  tasks: UserTask[]
+}
+/** A dashboard command, from the pane or the web bridge: `{ action, ...args }`. */
+export type DashboardCommand = { action: string; [arg: string]: unknown }
+export type DashboardCommandResult = { ok: boolean; message: string }
+/** The running web bridge, if any. */
+export type DashboardWeb = { port: number; url: string }
+
 declare module 'claude-code' {
   interface PluginState {
     'task-progress': {
@@ -60,6 +125,10 @@ declare module 'claude-code' {
       plan: TaskPlanRecord | null
       runs: ExecutorRun[]
       pending: PendingRun[]
+      /** The session dashboard (written throttled). */
+      snapshot: Snapshot | null
+      /** The dashboard web server while it runs. */
+      web: DashboardWeb | null
     }
   }
 }

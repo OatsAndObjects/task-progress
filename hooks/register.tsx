@@ -1,8 +1,21 @@
 import type { Register } from 'claude-code'
 
+import {
+  dashMode,
+  dashPlan,
+  dashProgress,
+  onAgentSpawn,
+  onPromptSubmit,
+  onSessionStart,
+  onToolCall,
+  onTurnComplete,
+  registerDashboard,
+} from './dashboard'
+import { parseBudget } from './dashboard-model'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
 
 const PLUGIN = 'task-progress'
+export { parseBudget }
 const TOOL = 'mcp__task-progress__TaskProgress'
 const PLAN_TOOL = 'mcp__task-progress__TaskPlan'
 const INPUTS_TOOL = 'mcp__task-progress__TaskInputs'
@@ -201,22 +214,6 @@ export function sparkle(frame: number, isDone: boolean): string {
   return isDone ? '✓' : SPARKLES[Math.floor(frame / 2) % SPARKLES.length]!
 }
 
-/** `[budget: 12m step: 2]` in a dispatch prompt; null when there is no (valid) tag. */
-export function parseBudget(prompt: unknown): { minutes: number; step: number | null } | null {
-  if (typeof prompt !== 'string') return null
-  const lower = prompt.toLowerCase()
-  const open = lower.indexOf('[budget:')
-  if (open < 0) return null
-  const close = lower.indexOf(']', open)
-  if (close < 0) return null
-  const inner = lower.slice(open + '[budget:'.length, close)
-  const num = /^\s*(\d+(?:\.\d+)?)\s*m/.exec(inner)
-  const minutes = num ? Number(num[1]) : 0
-  if (!(minutes > 0)) return null
-  const st = /step:\s*(\d+)/.exec(inner)
-  return { minutes, step: st ? Number(st[1]) : null }
-}
-
 export type BudgetDecision = { action: 'allow' | 'warn' | 'deny'; leftMs: number }
 
 /** Below 80% of the budget allow, from 80% warn (still allowed), from 100% deny. */
@@ -253,6 +250,15 @@ export function runLabel(r: { step: number | null }, index: number): string {
 function toInt(v: unknown, fallback: number): number {
   const n = typeof v === 'number' ? v : Number(v)
   return Number.isFinite(n) ? Math.floor(n) : fallback
+}
+
+/** Dashboard bookkeeping never breaks the hook it rides on. */
+async function quiet(p: Promise<unknown> | undefined): Promise<void> {
+  try {
+    await p
+  } catch {
+    // best effort
+  }
 }
 
 type Ctx = {
@@ -323,6 +329,7 @@ async function applyProgress(
   c.clearTimer = undefined
   await $.state.set(hiddenRef, false)
   await $.state.set(progressRef, rec)
+  await quiet(dashProgress($, { task: a.task, step: a.step, totalSteps: a.totalSteps, label: a.label, done: a.done }))
   startTicker($, c)
   if (a.done) {
     c.clearTimer = $.clock.after(CLEAR_AFTER_MS, () => {
@@ -336,8 +343,63 @@ async function applyProgress(
 }
 
 
+/**
+ * The enforcement rules: input gate and dispatch budget for the main session, time
+ * budget for sub-agents. Plugin tools and the plugin's own calls pass. `notice` is
+ * the 80% wrap-up line added to an allowed call's result.
+ */
+async function gateDecision($: any, e: any, isOwnCall: boolean, c: Ctx): Promise<{ deny?: string; notice?: string }> {
+  if (OWN_TOOLS.includes(e.tool) || isOwnCall || !(await isOn($))) return {}
+  const agentId = e.agentId as string | undefined
+
+  if (!agentId) {
+    if (!GATED_TOOLS.includes(e.tool)) return {}
+    const { value: isChecked } = await $.state.get(checkedRef)
+    if (!isChecked) {
+      return {
+        deny: `Orchestrator mode: call ${INPUTS_TOOL} first for this user prompt (an empty inputs list is fine if nothing is needed), then ${e.tool}. If it lists questions, ask them in one AskUserQuestion.`,
+      }
+    }
+    if (e.tool === 'Agent' && !parseBudget(e.prompt)) {
+      return {
+        deny: `Orchestrator mode: plan before dispatching. Call ${PLAN_TOOL}, then start the Agent prompt with the line "[budget: <N>m step: <k>]" (minutes for this step).`,
+      }
+    }
+    return {}
+  }
+
+  // A sub-agent's call. Find its run; the first call of one that spawn could not
+  // name yet claims the oldest pending dispatch.
+  const now: number = await $.clock.now()
+  let runs = await getRuns($)
+  let run = runs.find(r => r.id === agentId)
+  if (!run) {
+    const pend = await getPending($)
+    const first = pend[0]
+    if (!first) return {}
+    run = { id: agentId, ...first }
+    runs = [...runs, run]
+    await $.state.set(pendingRef, pend.slice(1))
+    await $.state.set(runsRef, runs)
+    startTicker($, c)
+  }
+  if (e.tool === 'Agent') return { deny: 'Executors never spawn agents. Do the step yourself and report.' }
+  const d = budgetDecision(now - run.startedAt, run.budgetMs)
+  if (d.action === 'deny') {
+    return { deny: `Time budget of ${formatMinutes(run.budgetMs)} exceeded: stop now and return your report to the orchestrator.` }
+  }
+  if (d.action === 'warn' && !run.isWarned) {
+    await $.state.set(runsRef, runs.map(r => (r.id === agentId ? { ...r, isWarned: true } : r)))
+    const mins = Math.max(1, Math.ceil(d.leftMs / 60000))
+    return { notice: `~${mins} min left of your ${formatMinutes(run.budgetMs)} budget: wrap up, no new work, prepare your report.` }
+  }
+  return {}
+}
+
 export const register: Register = on => {
   const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [] }
+  // The session dashboard: /dashboard and its pane. Its collectors ride on the hooks below.
+  registerDashboard(on)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -421,6 +483,7 @@ export const register: Register = on => {
     await $.state.set(pendingRef, [])
     stopTicker(c)
     if (value && !value.isDone) startTicker($, c)
+    await quiet(onSessionStart($, e))
     return next(e)
   })
 
@@ -448,6 +511,7 @@ export const register: Register = on => {
     const task = (String(e.task ?? '').trim() || 'Task').slice(0, 40)
     const plan: TaskPlanRecord = { task, steps, createdAt: await $.clock.now() }
     await $.state.set(planRef, plan)
+    await quiet(dashPlan($, task, steps))
     const total = steps.reduce((n, s) => n + s.minutes, 0)
     await applyProgress($, c, { task, totalSteps: steps.length, step: 0, label: `planned · ~${Math.round(total)} min`, done: false })
     const list = steps.map((s, i) => `${i + 1}. ${s.title} (${s.minutes}m)`).join('; ')
@@ -477,13 +541,18 @@ export const register: Register = on => {
   // A new user prompt reopens the input gate. Slash commands and injected rows do not.
   on('prompt.submit', async ($, e, next) => {
     if (!e.command && !e.isMeta) await $.state.set(checkedRef, false)
+    await quiet(onPromptSubmit($, e))
     return next(e)
   })
 
   // Dispatch: remember the budget of each tagged agent, so its tool calls can be timed.
   on('agent.spawn', async ($, e, next) => {
     const b = (await isOn($)) ? parseBudget(e.prompt) : null
-    if (!b) return next(e)
+    if (!b) {
+      const plain: any = await next(e)
+      await quiet(onAgentSpawn($, e, plain))
+      return plain
+    }
     const run: PendingRun = {
       step: b.step,
       startedAt: await $.clock.now(),
@@ -505,6 +574,7 @@ export const register: Register = on => {
         startTicker($, c)
       }
     }
+    await quiet(onAgentSpawn($, e, out))
     return out
   }).catch(($, e, next) => next(e)) // timing is best effort: a failed hook must not stop a dispatch
 
@@ -520,61 +590,23 @@ export const register: Register = on => {
         await releaseTicker($, c)
       }
     }
+    await quiet(onTurnComplete($, e))
     return next(e)
   })
 
   // The enforcement hook: input gate and dispatch budget for the main session, time
   // budget for sub-agents. Plugin tools answer in their own hooks above.
   on('tool.call', async ($, e, next) => {
-    if (OWN_TOOLS.includes(e.tool) || !(await isOn($))) return next(e)
-    const agentId = (e as any).agentId as string | undefined
-
-    if (!agentId) {
-      if (!GATED_TOOLS.includes(e.tool)) return next(e)
-      const { value: isChecked } = await $.state.get(checkedRef)
-      if (!isChecked) {
-        return {
-          deny: `Orchestrator mode: call ${INPUTS_TOOL} first for this user prompt (an empty inputs list is fine if nothing is needed), then ${e.tool}. If it lists questions, ask them in one AskUserQuestion.`,
-        }
-      }
-      if (e.tool === 'Agent' && !parseBudget((e as any).prompt)) {
-        return {
-          deny: `Orchestrator mode: plan before dispatching. Call ${PLAN_TOOL}, then start the Agent prompt with the line "[budget: <N>m step: <k>]" (minutes for this step).`,
-        }
-      }
-      return next(e)
+    const d = await gateDecision($, e, next.origin?.plugin === PLUGIN, c)
+    let out: any
+    if (d.deny !== undefined) {
+      out = { deny: d.deny }
+    } else {
+      out = await next(e)
+      if (d.notice && out.deny === undefined) out = { ...out, context: [...(out.context ?? []), d.notice] }
     }
-
-    // A sub-agent's call. Find its run; the first call of one that spawn could not
-    // name yet claims the oldest pending dispatch.
-    const now: number = await $.clock.now()
-    let runs = await getRuns($)
-    let run = runs.find(r => r.id === agentId)
-    if (!run) {
-      const pend = await getPending($)
-      const first = pend[0]
-      if (!first) return next(e)
-      run = { id: agentId, ...first }
-      runs = [...runs, run]
-      await $.state.set(pendingRef, pend.slice(1))
-      await $.state.set(runsRef, runs)
-      startTicker($, c)
-    }
-    if (e.tool === 'Agent') return { deny: 'Executors never spawn agents. Do the step yourself and report.' }
-    const d = budgetDecision(now - run.startedAt, run.budgetMs)
-    if (d.action === 'deny') {
-      return {
-        deny: `Time budget of ${formatMinutes(run.budgetMs)} exceeded: stop now and return your report to the orchestrator.`,
-      }
-    }
-    if (d.action === 'warn' && !run.isWarned) {
-      await $.state.set(runsRef, runs.map(r => (r.id === agentId ? { ...r, isWarned: true } : r)))
-      const out: any = await next(e)
-      if (out.deny !== undefined) return out
-      const mins = Math.max(1, Math.ceil(d.leftMs / 60000))
-      return { ...out, context: [...(out.context ?? []), `~${mins} min left of your ${formatMinutes(run.budgetMs)} budget: wrap up, no new work, prepare your report.`] }
-    }
-    return next(e)
+    await quiet(onToolCall($, e, out))
+    return out
   })
 
   // /progress: answered as plain text by the hook itself, so no model turn is started.
@@ -589,6 +621,7 @@ export const register: Register = on => {
       c.clearTimer = undefined
       await $.state.set(hiddenRef, true)
       await $.state.set(progressRef, null)
+      await quiet(dashProgress($, null))
       await releaseTicker($, c)
       return { text: 'Progress bar cleared.' }
     }
@@ -600,6 +633,7 @@ export const register: Register = on => {
     if (arg === null) return { text: 'Usage: /orchestrate on | off | status' }
     if (arg === 'on' || arg === 'off') {
       await $.state.set(modeRef, arg)
+      await quiet(dashMode($, arg === 'on'))
       try {
         await $.ui.invalidate('prompt.section')
       } catch {
