@@ -37,7 +37,8 @@ function setup($: any, on: any, startAt = 1_000_000) {
     }))
     await ui.unmount()
     const at = texts.findIndex(t => t.text.startsWith('━'))
-    const barRuns = at < 0 ? [] : texts.slice(at)
+    // Newer engines keep their own band row under the plugin's rows: leave it out of the bar.
+    const barRuns = at < 0 ? [] : texts.slice(at).filter(t => t.text !== 'ENGINE')
     return {
       all: texts.map(t => t.text).join(''),
       row1: (at < 0 ? texts : texts.slice(0, at)).map(t => t.text).join(''),
