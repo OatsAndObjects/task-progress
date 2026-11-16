@@ -21,8 +21,45 @@ export type TaskProgressRecord = {
   finishedAt: number
 }
 
+export type PlanStep = { title: string; minutes: number; executor?: string }
+
+export type TaskPlanRecord = {
+  task: string
+  steps: PlanStep[]
+  /** Epoch ms when the plan was registered. */
+  createdAt: number
+}
+
+/** One running (budgeted) executor sub-agent. */
+export type ExecutorRun = {
+  /** The sub-agent's id: `agentId` on its tool calls. */
+  id: string
+  /** The plan step from the `[budget: Nm step: k]` tag, if it had one. */
+  step: number | null
+  /** Epoch ms when it was dispatched. */
+  startedAt: number
+  /** Its time budget in ms. */
+  budgetMs: number
+  /** True once the 80% wrap-up notice has been given. */
+  isWarned: boolean
+}
+
+/** A dispatch seen at `agent.spawn` whose agent id is not known yet. */
+export type PendingRun = Omit<ExecutorRun, 'id'>
+
 declare module 'claude-code' {
   interface PluginState {
-    'task-progress': { progress: TaskProgressRecord | null; hidden: boolean; frame: number }
+    'task-progress': {
+      progress: TaskProgressRecord | null
+      hidden: boolean
+      frame: number
+      /** Orchestrator mode; unset means on. */
+      mode: 'on' | 'off'
+      /** True once TaskInputs has been answered for the current user prompt. */
+      inputsChecked: boolean
+      plan: TaskPlanRecord | null
+      runs: ExecutorRun[]
+      pending: PendingRun[]
+    }
   }
 }

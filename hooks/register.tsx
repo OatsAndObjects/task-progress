@@ -1,9 +1,19 @@
 import type { Register } from 'claude-code'
 
-import type { TaskProgressRecord } from '../types/index'
+import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
 
 const PLUGIN = 'task-progress'
 const TOOL = 'mcp__task-progress__TaskProgress'
+const PLAN_TOOL = 'mcp__task-progress__TaskPlan'
+const INPUTS_TOOL = 'mcp__task-progress__TaskInputs'
+const OWN_TOOLS: readonly string[] = [TOOL, PLAN_TOOL, INPUTS_TOOL]
+/** Tools that change state; the main session may not use them before TaskInputs. */
+export const GATED_TOOLS: readonly string[] = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent']
+/** Share of the budget after which an executor is told to wrap up. */
+export const WARN_AT = 0.8
+const MAX_PARALLEL = 3
+const C_WARN = '#F59E0B'
+const C_OVER = '#F87171'
 const BAR_CELLS = 14
 const CLEAR_AFTER_MS = 8000
 const TICK_MS = 120
@@ -26,9 +36,23 @@ const PROMPT = [
   "Keep calls brief; don't mention the bar in replies.",
 ].join(' ')
 
+const ORCH_PROMPT = [
+  'Orchestrator mode (task-progress): you plan and delegate; Sonnet executors do the work.',
+  '1) For every new user prompt call TaskInputs first (empty inputs if nothing is needed); if it lists questions, ask them in ONE AskUserQuestion before anything else.',
+  '2) Break the task into steps and call TaskPlan (task, steps with minutes).',
+  `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt whose first line is "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
+  '4) Do not edit code or run builds yourself; review reports, re-plan, update TaskProgress. If an executor ran out of time, re-dispatch the rest with a new budget.',
+  'Full protocol: skill task-progress:orchestrate. Executor agents ignore this section.',
+].join(' ')
+
 const progressRef = { plugin: 'task-progress', key: 'progress' } as const
 const hiddenRef = { plugin: 'task-progress', key: 'hidden' } as const
 const frameRef = { plugin: 'task-progress', key: 'frame' } as const
+const modeRef = { plugin: 'task-progress', key: 'mode' } as const
+const checkedRef = { plugin: 'task-progress', key: 'inputsChecked' } as const
+const planRef = { plugin: 'task-progress', key: 'plan' } as const
+const runsRef = { plugin: 'task-progress', key: 'runs' } as const
+const pendingRef = { plugin: 'task-progress', key: 'pending' } as const
 
 export function bar(percent: number): string {
   const filled = Math.max(0, Math.min(BAR_CELLS, Math.round((percent / 100) * BAR_CELLS)))
@@ -177,26 +201,152 @@ export function sparkle(frame: number, isDone: boolean): string {
   return isDone ? '✓' : SPARKLES[Math.floor(frame / 2) % SPARKLES.length]!
 }
 
+/** `[budget: 12m step: 2]` in a dispatch prompt; null when there is no (valid) tag. */
+export function parseBudget(prompt: unknown): { minutes: number; step: number | null } | null {
+  if (typeof prompt !== 'string') return null
+  const lower = prompt.toLowerCase()
+  const open = lower.indexOf('[budget:')
+  if (open < 0) return null
+  const close = lower.indexOf(']', open)
+  if (close < 0) return null
+  const inner = lower.slice(open + '[budget:'.length, close)
+  const num = /^\s*(\d+(?:\.\d+)?)\s*m/.exec(inner)
+  const minutes = num ? Number(num[1]) : 0
+  if (!(minutes > 0)) return null
+  const st = /step:\s*(\d+)/.exec(inner)
+  return { minutes, step: st ? Number(st[1]) : null }
+}
+
+export type BudgetDecision = { action: 'allow' | 'warn' | 'deny'; leftMs: number }
+
+/** Below 80% of the budget allow, from 80% warn (still allowed), from 100% deny. */
+export function budgetDecision(elapsedMs: number, budgetMs: number): BudgetDecision {
+  const leftMs = budgetMs - elapsedMs
+  if (elapsedMs >= budgetMs) return { action: 'deny', leftMs }
+  if (elapsedMs >= budgetMs * WARN_AT) return { action: 'warn', leftMs }
+  return { action: 'allow', leftMs }
+}
+
+/** `3:40 left`, or `+0:20 over` once the budget is spent. */
+export function formatCountdown(leftMs: number): string {
+  const s = Math.round(Math.abs(leftMs) / 1000)
+  const t = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  return leftMs >= 0 ? `${t} left` : `+${t} over`
+}
+
+export function formatMinutes(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60000))
+  return `${m} min`
+}
+
+/** `/orchestrate` argument: on, off, status (also empty), else null. */
+export function parseModeArg(arg: string): 'on' | 'off' | 'status' | null {
+  const a = arg.trim().toLowerCase()
+  if (a === '' || a === 'status') return 'status'
+  return a === 'on' || a === 'off' ? a : null
+}
+
+export function runLabel(r: { step: number | null }, index: number): string {
+  return r.step !== null ? `step ${r.step}` : `agent ${index + 1}`
+}
+
 function toInt(v: unknown, fallback: number): number {
   const n = typeof v === 'number' ? v : Number(v)
   return Number.isFinite(n) ? Math.floor(n) : fallback
 }
 
-export const register: Register = on => {
-  let clearTimer: { cancel: () => void } | undefined
-  let ticker: { cancel: () => void } | undefined
-  let frame = 0
+type Ctx = {
+  clearTimer: { cancel: () => void } | undefined
+  ticker: { cancel: () => void } | undefined
+  frame: number
+  /** Agents that finished before their `agent.spawn` answer came back; bounded. */
+  doneIds: string[]
+}
 
-  // The frame timer runs only while a task shows (running, or the 8 s done display).
-  const stopTicker = () => {
-    ticker?.cancel()
-    ticker = undefined
+function startTicker($: any, c: Ctx) {
+  if (c.ticker) return
+  c.ticker = $.clock.every(TICK_MS, () => {
+    c.frame += 1
+    void $.state.set(frameRef, c.frame)
+  })
+}
+
+function stopTicker(c: Ctx) {
+  c.ticker?.cancel()
+  c.ticker = undefined
+}
+
+// The frame timer runs only while a task shows (running, or the 8 s done display)
+// or an executor is counting down.
+async function releaseTicker($: any, c: Ctx) {
+  const { value: progress } = await $.state.get(progressRef)
+  const { value: isHidden } = await $.state.get(hiddenRef)
+  const { value: runs } = await $.state.get(runsRef)
+  const shows = !!progress && !isHidden
+  if (!shows && !(runs && runs.length > 0)) stopTicker(c)
+}
+
+async function isOn($: any): Promise<boolean> {
+  return ((await $.state.get(modeRef)).value ?? 'on') === 'on'
+}
+async function getRuns($: any): Promise<ExecutorRun[]> {
+  return (await $.state.get(runsRef)).value ?? []
+}
+async function getPending($: any): Promise<PendingRun[]> {
+  return (await $.state.get(pendingRef)).value ?? []
+}
+function same(a: PendingRun, b: PendingRun): boolean {
+  return a.startedAt === b.startedAt && a.budgetMs === b.budgetMs && a.step === b.step
+}
+
+async function applyProgress(
+  $: any,
+  c: Ctx,
+  a: { task: string; totalSteps: number; step: number; label: string; done: boolean },
+) {
+  const now: number = await $.clock.now()
+  const { value: prev } = await $.state.get(progressRef)
+  const isSame = prev !== null && prev !== undefined && prev.task === a.task && !prev.isDone
+  const rec: TaskProgressRecord = {
+    task: a.task,
+    totalSteps: a.totalSteps,
+    step: a.step,
+    label: a.label,
+    startedAt: isSame ? prev.startedAt : now,
+    lastStepAt: now,
+    prevStep: isSame ? prev.step : 0,
+    prevFill: isSame ? stepFraction(prev, now) : 0,
+    isDone: a.done,
+    finishedAt: a.done ? now : 0,
   }
+  c.clearTimer?.cancel()
+  c.clearTimer = undefined
+  await $.state.set(hiddenRef, false)
+  await $.state.set(progressRef, rec)
+  startTicker($, c)
+  if (a.done) {
+    c.clearTimer = $.clock.after(CLEAR_AFTER_MS, () => {
+      c.clearTimer = undefined
+      void (async () => {
+        await $.state.set(hiddenRef, true)
+        await releaseTicker($, c)
+      })()
+    })
+  }
+}
+
+
+export const register: Register = on => {
+  const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [] }
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'progress',
       description: "Show the current task's progress, or clear the bar",
+    })
+    await $.command.register({
+      name: 'orchestrate',
+      description: 'Orchestrator mode: /orchestrate on | off | status',
     })
     await $.tool.register({
       name: 'TaskProgress',
@@ -215,65 +365,216 @@ export const register: Register = on => {
         required: ['task', 'totalSteps', 'step'],
       },
     })
+    await $.tool.register({
+      name: 'TaskPlan',
+      description:
+        'Orchestrator: register the plan before dispatching executors. One entry per step with a time budget in minutes. It also sets the progress bar (one segment per step).',
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', description: 'Short name of the task.' },
+          steps: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                minutes: { type: 'number', minimum: 0.5, description: 'Time budget for the executor.' },
+                executor: { type: 'string', description: 'Agent type; default task-progress:executor.' },
+              },
+              required: ['title', 'minutes'],
+            },
+          },
+        },
+        required: ['task', 'steps'],
+      },
+    })
+    await $.tool.register({
+      name: 'TaskInputs',
+      description:
+        'Call first for every new user prompt, before any edit, command or dispatch: list the inputs the task will need from the user (empty list if none). Set asked true once you have asked them.',
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          inputs: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { question: { type: 'string' }, why: { type: 'string' } },
+              required: ['question', 'why'],
+            },
+          },
+          asked: { type: 'boolean', description: 'True once the user has been asked and answered.' },
+        },
+        required: ['inputs', 'asked'],
+      },
+    })
 
     const { value } = await $.state.get(progressRef)
     // A finished task from an earlier session stays hidden; an unfinished one is drawn again.
     await $.state.set(hiddenRef, !value || value.isDone)
-    stopTicker()
-    if (value && !value.isDone) {
-      if (!ticker) {
-        ticker = $.clock.every(TICK_MS, () => {
-          frame += 1
-          void $.state.set(frameRef, frame)
-        })
+    // Sub-agents do not outlive a session.
+    await $.state.set(runsRef, [])
+    await $.state.set(pendingRef, [])
+    stopTicker(c)
+    if (value && !value.isDone) startTicker($, c)
+    return next(e)
+  })
+
+  on('tool.call', { tool: TOOL }, async ($, e, next) => {
+    const task = (String(e.task ?? '').trim() || 'Task').slice(0, 40)
+    const { value: prev } = await $.state.get(progressRef)
+    const totalSteps = Math.max(1, toInt(e.totalSteps, prev?.totalSteps ?? 1))
+    const isDone = e.done === true
+    const step = isDone ? totalSteps : Math.min(totalSteps, Math.max(0, toInt(e.step, 0)))
+    const label = typeof e.label === 'string' ? e.label.trim() : ''
+    await applyProgress($, c, { task, totalSteps, step, label, done: isDone })
+    return { result: isDone ? `task done: ${task}` : `progress ${step}/${totalSteps} recorded` }
+  })
+
+  on('tool.call', { tool: PLAN_TOOL }, async ($, e, next) => {
+    const raw: any[] = Array.isArray(e.steps) ? e.steps : []
+    const steps = raw
+      .map(s => ({
+        title: String(s?.title ?? '').trim() || 'Step',
+        minutes: Math.max(0.5, Number(s?.minutes) || 1),
+        ...(typeof s?.executor === 'string' && s.executor ? { executor: s.executor } : {}),
+      }))
+      .slice(0, 50)
+    if (steps.length === 0) return { result: 'plan not recorded: give at least one step' }
+    const task = (String(e.task ?? '').trim() || 'Task').slice(0, 40)
+    const plan: TaskPlanRecord = { task, steps, createdAt: await $.clock.now() }
+    await $.state.set(planRef, plan)
+    const total = steps.reduce((n, s) => n + s.minutes, 0)
+    await applyProgress($, c, { task, totalSteps: steps.length, step: 0, label: `planned · ~${Math.round(total)} min`, done: false })
+    const list = steps.map((s, i) => `${i + 1}. ${s.title} (${s.minutes}m)`).join('; ')
+    return {
+      result:
+        `plan recorded: ${steps.length} steps, ~${Math.round(total)} min. ${list}. ` +
+        `Dispatch each step to task-progress:executor with the first prompt line "[budget: <N>m step: <k>]" (max ${MAX_PARALLEL} at once).`,
+    }
+  })
+
+  on('tool.call', { tool: INPUTS_TOOL }, async ($, e, next) => {
+    const inputs: { question?: string; why?: string }[] = Array.isArray(e.inputs) ? e.inputs : []
+    const asked = e.asked === true
+    if (inputs.length > 0 && !asked) {
+      await $.state.set(checkedRef, false)
+      const list = inputs.map((i, n) => `${n + 1}. ${i.question ?? ''} (why: ${i.why ?? ''})`).join(' ')
+      return {
+        result:
+          `Ask these now in ONE AskUserQuestion call before doing anything else: ${list} ` +
+          'Afterwards call TaskInputs again with asked: true.',
+      }
+    }
+    await $.state.set(checkedRef, true)
+    return { result: inputs.length === 0 ? 'input check recorded: nothing needed from the user' : 'input check recorded: user was asked' }
+  })
+
+  // A new user prompt reopens the input gate. Slash commands and injected rows do not.
+  on('prompt.submit', async ($, e, next) => {
+    if (!e.command && !e.isMeta) await $.state.set(checkedRef, false)
+    return next(e)
+  })
+
+  // Dispatch: remember the budget of each tagged agent, so its tool calls can be timed.
+  on('agent.spawn', async ($, e, next) => {
+    const b = (await isOn($)) ? parseBudget(e.prompt) : null
+    if (!b) return next(e)
+    const run: PendingRun = {
+      step: b.step,
+      startedAt: await $.clock.now(),
+      budgetMs: Math.round(b.minutes * 60000),
+      isWarned: false,
+    }
+    await $.state.set(pendingRef, [...(await getPending($)), run])
+    const out: any = await next(e)
+    const pend = await getPending($)
+    const isStillPending = pend.some(p => same(p, run))
+    const id: string | undefined = out?.agentId
+    if (out?.deny !== undefined || !id) {
+      await $.state.set(pendingRef, pend.filter(p => !same(p, run)))
+    } else if (isStillPending) {
+      await $.state.set(pendingRef, pend.filter(p => !same(p, run)))
+      const runs = await getRuns($)
+      if (!c.doneIds.includes(id) && !runs.some(r => r.id === id)) {
+        await $.state.set(runsRef, [...runs, { id, ...run }])
+        startTicker($, c)
+      }
+    }
+    return out
+  }).catch(($, e, next) => next(e)) // timing is best effort: a failed hook must not stop a dispatch
+
+  // An agent that finished no longer counts down.
+  on('turn.complete', async ($, e, next) => {
+    const id = (e as any).agentId as string | undefined
+    if (id) {
+      c.doneIds.push(id)
+      if (c.doneIds.length > 50) c.doneIds.shift()
+      const runs = await getRuns($)
+      if (runs.some(r => r.id === id)) {
+        await $.state.set(runsRef, runs.filter(r => r.id !== id))
+        await releaseTicker($, c)
       }
     }
     return next(e)
   })
 
-  on('tool.call', { tool: TOOL }, async ($, e, next) => {
-    const now = await $.clock.now()
-    const { value: prev } = await $.state.get(progressRef)
+  // The enforcement hook: input gate and dispatch budget for the main session, time
+  // budget for sub-agents. Plugin tools answer in their own hooks above.
+  on('tool.call', async ($, e, next) => {
+    if (OWN_TOOLS.includes(e.tool) || !(await isOn($))) return next(e)
+    const agentId = (e as any).agentId as string | undefined
 
-    const task = (String(e.task ?? '').trim() || 'Task').slice(0, 40)
-    const totalSteps = Math.max(1, toInt(e.totalSteps, prev?.totalSteps ?? 1))
-    const isDone = e.done === true
-    const step = isDone ? totalSteps : Math.min(totalSteps, Math.max(0, toInt(e.step, 0)))
-    const label = typeof e.label === 'string' ? e.label.trim() : ''
-
-    const isSame = prev !== null && prev !== undefined && prev.task === task && !prev.isDone
-    const next_: TaskProgressRecord = {
-      task,
-      totalSteps,
-      step,
-      label,
-      startedAt: isSame ? prev.startedAt : now,
-      lastStepAt: now,
-      prevStep: isSame ? prev.step : 0,
-      prevFill: isSame ? stepFraction(prev, now) : 0,
-      isDone,
-      finishedAt: isDone ? now : 0,
-    }
-    clearTimer?.cancel()
-    clearTimer = undefined
-    await $.state.set(hiddenRef, false)
-    await $.state.set(progressRef, next_)
-    if (!ticker) {
-      ticker = $.clock.every(TICK_MS, () => {
-        frame += 1
-        void $.state.set(frameRef, frame)
-      })
+    if (!agentId) {
+      if (!GATED_TOOLS.includes(e.tool)) return next(e)
+      const { value: isChecked } = await $.state.get(checkedRef)
+      if (!isChecked) {
+        return {
+          deny: `Orchestrator mode: call ${INPUTS_TOOL} first for this user prompt (an empty inputs list is fine if nothing is needed), then ${e.tool}. If it lists questions, ask them in one AskUserQuestion.`,
+        }
+      }
+      if (e.tool === 'Agent' && !parseBudget((e as any).prompt)) {
+        return {
+          deny: `Orchestrator mode: plan before dispatching. Call ${PLAN_TOOL}, then start the Agent prompt with the line "[budget: <N>m step: <k>]" (minutes for this step).`,
+        }
+      }
+      return next(e)
     }
 
-    if (isDone) {
-      clearTimer = $.clock.after(CLEAR_AFTER_MS, () => {
-        clearTimer = undefined
-        stopTicker()
-        void $.state.set(hiddenRef, true)
-      })
+    // A sub-agent's call. Find its run; the first call of one that spawn could not
+    // name yet claims the oldest pending dispatch.
+    const now: number = await $.clock.now()
+    let runs = await getRuns($)
+    let run = runs.find(r => r.id === agentId)
+    if (!run) {
+      const pend = await getPending($)
+      const first = pend[0]
+      if (!first) return next(e)
+      run = { id: agentId, ...first }
+      runs = [...runs, run]
+      await $.state.set(pendingRef, pend.slice(1))
+      await $.state.set(runsRef, runs)
+      startTicker($, c)
     }
-
-    return { result: isDone ? `task done: ${task}` : `progress ${step}/${totalSteps} recorded` }
+    if (e.tool === 'Agent') return { deny: 'Executors never spawn agents. Do the step yourself and report.' }
+    const d = budgetDecision(now - run.startedAt, run.budgetMs)
+    if (d.action === 'deny') {
+      return {
+        deny: `Time budget of ${formatMinutes(run.budgetMs)} exceeded: stop now and return your report to the orchestrator.`,
+      }
+    }
+    if (d.action === 'warn' && !run.isWarned) {
+      await $.state.set(runsRef, runs.map(r => (r.id === agentId ? { ...r, isWarned: true } : r)))
+      const out: any = await next(e)
+      if (out.deny !== undefined) return out
+      const mins = Math.max(1, Math.ceil(d.leftMs / 60000))
+      return { ...out, context: [...(out.context ?? []), `~${mins} min left of your ${formatMinutes(run.budgetMs)} budget: wrap up, no new work, prepare your report.`] }
+    }
+    return next(e)
   })
 
   // /progress: answered as plain text by the hook itself, so no model turn is started.
@@ -284,14 +585,37 @@ export const register: Register = on => {
       return { text: formatReply(value, await $.clock.now()) }
     }
     if (arg === 'clear') {
-      clearTimer?.cancel()
-      clearTimer = undefined
-      stopTicker()
+      c.clearTimer?.cancel()
+      c.clearTimer = undefined
       await $.state.set(hiddenRef, true)
       await $.state.set(progressRef, null)
+      await releaseTicker($, c)
       return { text: 'Progress bar cleared.' }
     }
     return { text: 'Usage: /progress  ·  /progress clear' }
+  })
+
+  on('command.run', { command: 'orchestrate' }, async ($, e) => {
+    const arg = parseModeArg(e.args ?? '')
+    if (arg === null) return { text: 'Usage: /orchestrate on | off | status' }
+    if (arg === 'on' || arg === 'off') {
+      await $.state.set(modeRef, arg)
+      try {
+        await $.ui.invalidate('prompt.section')
+      } catch {
+        // the protocol text updates with the next new thread
+      }
+      return { text: `Orchestrator mode ${arg}.` }
+    }
+    const isOrch = await isOn($)
+    const runs = await getRuns($)
+    const { value: plan } = await $.state.get(planRef)
+    const { value: isChecked } = await $.state.get(checkedRef)
+    const parts = [`Orchestrator mode ${isOrch ? 'on' : 'off'}`]
+    if (isOrch) parts.push(`input check ${isChecked ? 'done' : 'pending'} for this prompt`)
+    parts.push(plan ? `plan: ${plan.task}, ${plan.steps.length} steps` : 'no plan')
+    parts.push(`${runs.length} executor${runs.length === 1 ? '' : 's'} running`)
+    return { text: parts.join(' · ') }
   })
 
   // The band: one row above the prompt. Reading state while drawing subscribes this
@@ -299,20 +623,41 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const { value: progress } = await $.state.get(progressRef)
     const { value: isHidden } = await $.state.get(hiddenRef)
-    if (!progress || isHidden) return next(e)
+    const { value: runs = [] } = await $.state.get(runsRef)
+    const showsBar = !!progress && !isHidden
+    if (!showsBar && runs.length === 0) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
     const { value: frame = 0 } = await $.state.get(frameRef)
     const now = await $.clock.now()
+
+    const agentRow =
+      runs.length > 0 ? (
+        <Box>
+          <Text dimColor>⏱ </Text>
+          {runs.map((r, i) => {
+            const left = r.startedAt + r.budgetMs - now
+            const color = left < 0 ? C_OVER : left < r.budgetMs * (1 - WARN_AT) ? C_WARN : undefined
+            return (
+              <Text key={r.id} color={color} dimColor={color === undefined}>
+                {(i > 0 ? ' · ' : '') + runLabel(r, i) + ' · ' + formatCountdown(left)}
+              </Text>
+            )
+          })}
+        </Box>
+      ) : null
+
+    if (!progress || !showsBar) return <Box flexDirection="column">{agentRow}</Box>
+
     const pos = barPosition(progress, now, frame)
     const cells = buildBar(progress.totalSteps, pos, frame, progress.isDone)
 
     // Neighbouring cells of one colour share one Text.
-    const runs: { text: string; color: string }[] = []
+    const colorRuns: { text: string; color: string }[] = []
     for (const c of cells) {
-      const last = runs.at(-1)
+      const last = colorRuns.at(-1)
       if (last && last.color === c.color) last.text += c.ch
-      else runs.push({ text: c.ch, color: c.color })
+      else colorRuns.push({ text: c.ch, color: c.color })
     }
 
     return (
@@ -324,17 +669,18 @@ export const register: Register = on => {
           <Text dimColor>{'   ' + formatMeta(progress, now)}</Text>
         </Box>
         <Box>
-          {runs.map((r, i) => (r.color ? <Text key={String(i)} color={r.color}>{r.text}</Text> : <Text key={String(i)}>{r.text}</Text>))}
+          {colorRuns.map((r, i) => (r.color ? <Text key={String(i)} color={r.color}>{r.text}</Text> : <Text key={String(i)}>{r.text}</Text>))}
         </Box>
+        {agentRow}
       </Box>
     )
   })
 
   on('prompt.compose', async ($, e, next) => {
     const out = await next(e)
-    return {
-      ...out,
-      sections: [...out.sections, { id: `${PLUGIN}:progress-bar`, text: PROMPT, scope: 'session' as const }],
-    }
+    const sections = [...out.sections]
+    if (await isOn($)) sections.push({ id: `${PLUGIN}:orchestrator`, text: ORCH_PROMPT, scope: 'session' as const })
+    sections.push({ id: `${PLUGIN}:progress-bar`, text: PROMPT, scope: 'session' as const })
+    return { ...out, sections }
   })
 }
