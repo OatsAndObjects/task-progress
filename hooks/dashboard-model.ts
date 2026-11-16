@@ -11,9 +11,13 @@ import type {
   UserTaskPriority,
   UserTaskStatus,
 } from '../types/index'
+import { finishAndRelease, runCubeCommand } from './cubes-model'
 
-/** `[budget: 12m step: 2]` in a dispatch prompt; null when there is no (valid) tag. */
-export function parseBudget(prompt: unknown): { minutes: number; step: number | null } | null {
+/**
+ * `[budget: 12m step: 2]` (optionally `cubes: c3,c4`) in a dispatch prompt; null when
+ * there is no (valid) tag. `cubes` is present only when the tag names some.
+ */
+export function parseBudget(prompt: unknown): { minutes: number; step: number | null; cubes?: string[] } | null {
   if (typeof prompt !== 'string') return null
   const lower = prompt.toLowerCase()
   const open = lower.indexOf('[budget:')
@@ -25,7 +29,9 @@ export function parseBudget(prompt: unknown): { minutes: number; step: number | 
   const minutes = num ? Number(num[1]) : 0
   if (!(minutes > 0)) return null
   const st = /step:\s*(\d+)/.exec(inner)
-  return { minutes, step: st ? Number(st[1]) : null }
+  const cu = /cubes?:\s*((?:[a-z0-9_-]+\s*,\s*)*[a-z0-9_-]+)/.exec(inner)
+  const cubes = cu ? [...new Set(cu[1]!.split(/\s*,\s*/).filter(x => x !== ''))] : []
+  return { minutes, step: st ? Number(st[1]) : null, ...(cubes.length > 0 ? { cubes } : {}) }
 }
 
 export const TOOL_LOG_MAX = 200
@@ -37,7 +43,7 @@ const TASK_STATUSES: readonly UserTaskStatus[] = ['todo', 'doing', 'blocked', 'd
 const PRIORITIES: readonly UserTaskPriority[] = ['low', 'med', 'high']
 
 export function emptySnapshot(session: Snapshot['session'], orchestrate = true, tasks: UserTask[] = []): Snapshot {
-  return { session, orchestrate, progress: null, plan: null, agents: [], shells: [], files: [], toolLog: [], tasks }
+  return { session, orchestrate, progress: null, plan: null, agents: [], shells: [], files: [], toolLog: [], tasks, cubes: null }
 }
 
 export function setProgress(s: Snapshot, p: Snapshot['progress']): Snapshot {
@@ -205,9 +211,11 @@ export type CommandDeps = {
   saveTasks: (tasks: UserTask[]) => Promise<void>
   /** TaskStop on a background agent or shell. */
   stopTask: (id: string) => Promise<{ ok: boolean; message: string }>
-  /** Submit a prompt to the main session. */
-  submit: (text: string) => Promise<void>
+  /** Submit a prompt to the main session. `keepInputCheck`: not a new task, the input gate stays answered. */
+  submit: (text: string, opts?: { keepInputCheck?: boolean }) => Promise<void>
   setOrchestrate: (on: boolean) => Promise<void>
+  /** Remember the cube approval gate for new boards. */
+  setCubesGate?: (on: boolean) => Promise<void>
 }
 
 const fail = (message: string): DashboardCommandResult => ({ ok: false, message })
@@ -218,6 +226,8 @@ const strArg = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 export async function runCommand(cmd: DashboardCommand, d: CommandDeps): Promise<DashboardCommandResult> {
   try {
     const action = String(cmd?.action ?? '')
+    const cubeResult = await runCubeCommand(cmd, d)
+    if (cubeResult) return cubeResult
     switch (action) {
       case 'agent.stop':
       case 'shell.stop': {
@@ -233,6 +243,8 @@ export async function runCommand(cmd: DashboardCommand, d: CommandDeps): Promise
         if (!r.ok) return fail(r.message)
         const now = d.now()
         d.put(isAgent ? setAgentStatus(d.get(), id, 'stopped', now) : setShellStatus(d.get(), id, 'stopped', now))
+        // A stopped agent's cubes did not finish.
+        if (isAgent) await finishAndRelease(d, id, false)
         return ok(`${isAgent ? 'agent' : 'shell'} ${id} stopped`)
       }
       case 'step.set': {
@@ -342,7 +354,10 @@ export async function runCommand(cmd: DashboardCommand, d: CommandDeps): Promise
  */
 export function commandFromLine(msg: Record<string, unknown>): { commandId: string; cmd: DashboardCommand } {
   const { type: _t, id: commandId, args, ...top } = msg as any
-  const cmd: DashboardCommand = { ...top, ...(args && typeof args === 'object' ? args : {}), action: String(msg.action ?? '') }
+  const a = args && typeof args === 'object' ? args : {}
+  const cmd: DashboardCommand = { ...top, ...a, action: String(msg.action ?? '') }
+  // A cube's own `action` sentence under args would clash with the command name.
+  if (typeof a.action === 'string' && a.action !== cmd.action && cmd.cubeAction === undefined) cmd.cubeAction = a.action
   return { commandId: String(commandId ?? ''), cmd }
 }
 

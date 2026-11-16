@@ -93,6 +93,40 @@ export type UserTask = {
   updatedAt: number
   source: 'user' | 'plan'
 }
+export type CubeStatus = 'proposed' | 'approved' | 'queued' | 'running' | 'done' | 'failed' | 'skipped' | 'rejected' | 'revising'
+/** One atomic unit of a task the user approves before it runs. */
+export type Cube = {
+  /** `c1`, `c2`, ... (lower case). */
+  id: string
+  title: string
+  /** One sentence: the single thing this cube does. */
+  action: string
+  /** 2-6 ordered micro-steps inside the cube. */
+  flow: string[]
+  /** Ids of cubes that must be done first. */
+  after: string[]
+  /** A verifiable check that proves the cube is done. */
+  doneWhen: string
+  files?: string[]
+  /** At most 10. */
+  minutes: number
+  status: CubeStatus
+  /** The user's change request (or rejection reason). */
+  note?: string
+  editedBy?: 'user' | 'claude'
+  version: number
+  agentId?: string
+  startedAt?: number
+  endedAt?: number
+}
+export type CubeBoard = {
+  task: string
+  /** When true, only cubes the user approved may be dispatched. */
+  gate: boolean
+  cubes: Cube[]
+  /** Cube ids grouped by dependency depth (computed): lane 0 has no deps. */
+  lanes: string[][]
+}
 /** The session dashboard's whole state; the web app reads exactly this shape. */
 export type Snapshot = {
   session: { id: string; cwd: string; startedAt: number }
@@ -105,6 +139,8 @@ export type Snapshot = {
   /** Newest last, at most 200. */
   toolLog: SnapshotToolEntry[]
   tasks: UserTask[]
+  /** The approval cube board of the current task, if it was planned in cubes. */
+  cubes: CubeBoard | null
 }
 /** A dashboard command, from the pane or the web bridge: `{ action, ...args }`. */
 export type DashboardCommand = { action: string; [arg: string]: unknown }
@@ -129,6 +165,8 @@ declare module 'claude-code' {
       snapshot: Snapshot | null
       /** The dashboard web server while it runs. */
       web: DashboardWeb | null
+      /** Approval gate for new cube boards; unset means on. */
+      cubesGate: 'on' | 'off'
     }
   }
 }

@@ -1,7 +1,12 @@
 import type { Register } from 'claude-code'
 
 import {
+  dashCubesGate,
+  dashGetCubes,
   dashMode,
+  dashReviseCube,
+  dashSetCubes,
+  dashSetCubesGate,
   dashPlan,
   dashProgress,
   onAgentSpawn,
@@ -12,6 +17,7 @@ import {
   registerDashboard,
 } from './dashboard'
 import { parseBudget } from './dashboard-model'
+import { buildBoard, gateCheck, topoOrder } from './cubes-model'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
 
 const PLUGIN = 'task-progress'
@@ -19,7 +25,8 @@ export { parseBudget }
 const TOOL = 'mcp__task-progress__TaskProgress'
 const PLAN_TOOL = 'mcp__task-progress__TaskPlan'
 const INPUTS_TOOL = 'mcp__task-progress__TaskInputs'
-const OWN_TOOLS: readonly string[] = [TOOL, PLAN_TOOL, INPUTS_TOOL]
+const CUBE_TOOL = 'mcp__task-progress__CubeRevise'
+const OWN_TOOLS: readonly string[] = [TOOL, PLAN_TOOL, INPUTS_TOOL, CUBE_TOOL]
 /** Tools that change state; the main session may not use them before TaskInputs. */
 export const GATED_TOOLS: readonly string[] = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent']
 /** Share of the budget after which an executor is told to wrap up. */
@@ -55,8 +62,24 @@ const ORCH_PROMPT = [
   '2) Break the task into steps and call TaskPlan (task, steps with minutes).',
   `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt whose first line is "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
   '4) Do not edit code or run builds yourself; review reports, re-plan, update TaskProgress. If an executor ran out of time, re-dispatch the rest with a new budget.',
+  'Multi-action tasks: TaskPlan with `cubes` ({id,title,action,flow 2-6,after,doneWhen,minutes<=10}, atomic), then STOP: the user approves each cube; approvals arrive as prompts. Never dispatch an unapproved cube; tag "cubes: <ids>" in the budget line. Change requests: CubeRevise.',
   'Full protocol: skill task-progress:orchestrate. Executor agents ignore this section.',
 ].join(' ')
+
+const CUBE_SCHEMA = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', description: 'c1, c2, ...' },
+    title: { type: 'string' },
+    action: { type: 'string', description: 'One sentence: the single thing this cube does (max ~200 characters).' },
+    flow: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 6, description: '2-6 ordered micro-steps inside the cube.' },
+    after: { type: 'array', items: { type: 'string' }, description: 'Ids of cubes that must be done first.' },
+    doneWhen: { type: 'string', description: 'A verifiable check that proves the cube is done.' },
+    files: { type: 'array', items: { type: 'string' } },
+    minutes: { type: 'number', minimum: 0.5, maximum: 10 },
+  },
+  required: ['id', 'title', 'action', 'flow', 'doneWhen', 'minutes'],
+}
 
 const progressRef = { plugin: 'task-progress', key: 'progress' } as const
 const hiddenRef = { plugin: 'task-progress', key: 'hidden' } as const
@@ -365,6 +388,11 @@ async function gateDecision($: any, e: any, isOwnCall: boolean, c: Ctx): Promise
         deny: `Orchestrator mode: plan before dispatching. Call ${PLAN_TOOL}, then start the Agent prompt with the line "[budget: <N>m step: <k>]" (minutes for this step).`,
       }
     }
+    if (e.tool === 'Agent') {
+      const board = await dashGetCubes($)
+      const msg = gateCheck(board, parseBudget(e.prompt)?.cubes)
+      if (msg) return { deny: `Approval cubes: ${msg}` }
+    }
     return {}
   }
 
@@ -438,7 +466,6 @@ export const register: Register = on => {
           task: { type: 'string', description: 'Short name of the task.' },
           steps: {
             type: 'array',
-            minItems: 1,
             items: {
               type: 'object',
               properties: {
@@ -449,9 +476,35 @@ export const register: Register = on => {
               required: ['title', 'minutes'],
             },
           },
+          cubes: { type: 'array', items: CUBE_SCHEMA, description: 'Atomic approval cubes; preferred over steps. The user approves each before it runs.' },
         },
-        required: ['task', 'steps'],
+        required: ['task'],
       },
+    })
+    await $.tool.register({
+      name: 'CubeRevise',
+      description:
+        "Answer the user's change request for an approval cube: change its fields, or replace it with atomic cubes via splitInto. The cube goes back to the user for approval.",
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          action: { type: 'string' },
+          flow: { type: 'array', items: { type: 'string' } },
+          after: { type: 'array', items: { type: 'string' } },
+          doneWhen: { type: 'string' },
+          files: { type: 'array', items: { type: 'string' } },
+          minutes: { type: 'number' },
+          splitInto: { type: 'array', items: CUBE_SCHEMA },
+        },
+        required: ['id'],
+      },
+    })
+    await $.command.register({
+      name: 'tp-cubes',
+      description: 'Approval cubes: /tp-cubes on | off | status',
     })
     await $.tool.register({
       name: 'TaskInputs',
@@ -499,6 +552,30 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: PLAN_TOOL }, async ($, e, next) => {
+    const rawCubes: any[] = Array.isArray(e.cubes) ? e.cubes : []
+    if (rawCubes.length > 0) {
+      const task = (String(e.task ?? '').trim() || 'Task').slice(0, 40)
+      const built = buildBoard(task, rawCubes, await dashCubesGate($))
+      if ('error' in built) return { result: `plan not recorded: ${built.error}` }
+      const board = built.board
+      const steps = topoOrder(board).map(cb => ({ title: `${cb.id} · ${cb.title}`, minutes: cb.minutes }))
+      const total = steps.reduce((n, st) => n + st.minutes, 0)
+      await $.state.set(planRef, { task, steps, createdAt: await $.clock.now() })
+      await quiet(dashSetCubes($, board))
+      await applyProgress($, c, { task, totalSteps: steps.length, step: 0, label: `${steps.length} cubes · ~${Math.round(total)} min`, done: false })
+      try {
+        $.ui.toast(`${steps.length} cubes waiting for approval — /tp-dashboard web`)
+      } catch {
+        // best effort
+      }
+      const lanes = board.lanes.map((l, i) => `lane ${i + 1}: ${l.join(', ')}`).join('; ')
+      return {
+        result:
+          `cube plan recorded: ${steps.length} cubes, ~${Math.round(total)} min (${lanes}). STOP now and wait: the user approves cubes on the dashboard ` +
+          `and each approval arrives as a prompt. Never dispatch an unapproved cube; tag dispatches "[budget: <N>m step: <k> cubes: <ids>]".` +
+          (board.gate ? '' : ' (The approval gate is off.)'),
+      }
+    }
     const raw: any[] = Array.isArray(e.steps) ? e.steps : []
     const steps = raw
       .map(s => ({
@@ -520,6 +597,31 @@ export const register: Register = on => {
         `plan recorded: ${steps.length} steps, ~${Math.round(total)} min. ${list}. ` +
         `Dispatch each step to task-progress:executor with the first prompt line "[budget: <N>m step: <k>]" (max ${MAX_PARALLEL} at once).`,
     }
+  })
+
+  on('tool.call', { tool: CUBE_TOOL }, async ($, e, next) => {
+    const r = await dashReviseCube($, e)
+    return {
+      result: r.ok
+        ? `${r.message}. It is back with the user as proposed; STOP and wait for the approval prompt.`
+        : `cube not revised: ${r.message}`,
+    }
+  })
+
+  on('command.run', { command: 'tp-cubes' }, async ($, e) => {
+    const a = String(e.args ?? '').trim().toLowerCase()
+    if (a === 'on' || a === 'off') {
+      await dashSetCubesGate($, a === 'on')
+      return { text: `Approval cubes ${a}.` }
+    }
+    if (a === '' || a === 'status') {
+      const b = await dashGetCubes($)
+      const gate = (await dashCubesGate($)) ? 'on' : 'off'
+      if (!b) return { text: `Approval cubes ${gate} · no cube board` }
+      const n = (st: string) => b.cubes.filter(x => x.status === st).length
+      return { text: `Approval cubes ${gate} · ${b.cubes.length} cubes: ${n('proposed')} waiting, ${n('approved') + n('queued')} approved, ${n('running')} running, ${n('done')} done` }
+    }
+    return { text: 'Usage: /tp-cubes on | off | status' }
   })
 
   on('tool.call', { tool: INPUTS_TOOL }, async ($, e, next) => {

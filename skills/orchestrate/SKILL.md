@@ -21,3 +21,8 @@ Do not edit code or run builds yourself. Read each executor report (Status, What
 
 ## Time budgets are enforced
 At 80% of its budget an executor is told to wrap up. At 100% every tool call it makes is refused and it must report. If a step came back partial because of time, you decide: re-dispatch the remainder with a fresh `[budget: ...]` (more minutes, narrower brief), or change the plan. The band shows each running executor's countdown and shows overrun in red.
+
+## Approval cubes
+For any task needing more than one action, call `TaskPlan` with `cubes` instead of `steps`. Each cube is atomic: one action (one sentence), 2-6 ordered `flow` micro-steps, a verifiable `doneWhen`, at most 10 minutes, and `after` listing only real dependencies so independent cubes can run in parallel. The call is rejected, with the cube to split named, if a cube is not atomic, references an unknown id, forms a cycle, or there are more than 40.
+
+Then STOP and wait. The user approves, changes or rejects each cube on the dashboard (`/tp-dashboard`, or `/tp-dashboard web`); each approval arrives as a prompt telling you which cube to run. Never dispatch an unapproved cube: tag every dispatch `[budget: <N>m step: <k> cubes: <ids>]`; while the gate is on (`/tp-cubes on|off|status`) an untagged or unapproved dispatch is refused. When the user asks for a change you get a prompt; call `CubeRevise` (split the cube if it is not atomic), then wait again.

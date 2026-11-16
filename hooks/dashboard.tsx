@@ -30,6 +30,8 @@ import {
   touchFile,
   type CommandDeps,
 } from './dashboard-model'
+import { finishAndRelease, markRunning, reviseCube, withBoard } from './cubes-model'
+import type { CubeBoard } from '../types/index'
 
 export const PANE_ID = 'tp-dashboard'
 const PANE_TITLE = 'Session dashboard'
@@ -67,6 +69,9 @@ type DashCtx = {
 // The orchestrator's own state, shared by reference (state refs are plain literals).
 const modeRef = { plugin: 'task-progress', key: 'mode' } as const
 const checkedRef = { plugin: 'task-progress', key: 'inputsChecked' } as const
+const cubesGateRef = { plugin: 'task-progress', key: 'cubesGate' } as const
+const C_CUBE_RUN = '#7DD3FC'
+const C_PROPOSED = '#8B93A1'
 
 async function isOrchestrateOn($: any): Promise<boolean> {
   return ((await $.state.get(modeRef)).value ?? 'on') === 'on'
@@ -196,13 +201,17 @@ function deps($: any, nowMs: number): CommandDeps {
       if (out?.isError) return { ok: false, message: String(out.text ?? 'TaskStop failed') }
       return { ok: true, message: 'stopped' }
     },
-    submit: async (text: string) => {
+    submit: async (text: string, opts?: { keepInputCheck?: boolean }) => {
       const out: any = await $.prompt.submit({ text })
       if (out && typeof out.deny === 'string') throw new Error(out.deny)
       // A prompt the dashboard sends is a new task: the input gate opens again.
-      await $.state.set(checkedRef, false)
+      // Cube approvals and change requests continue the current task.
+      if (!opts?.keepInputCheck) await $.state.set(checkedRef, false)
     },
     setOrchestrate: (isOn: boolean) => setOrchestrate($, isOn),
+    setCubesGate: async (isOn: boolean) => {
+      await $.state.set(cubesGateRef, isOn ? 'on' : 'off')
+    },
   }
 }
 
@@ -395,6 +404,10 @@ export async function onAgentSpawn($: any, e: any, out: any) {
       ...(b && b.step !== null ? { step: b.step } : {}),
     }
     await mutate($, s => addAgent(s, a))
+    if (b?.cubes && b.cubes.length > 0) {
+      const ids = b.cubes
+      await mutate($, s => (s.cubes ? withBoard(s, markRunning(s.cubes, ids, id, now)) : s))
+    }
   }
 }
 
@@ -403,6 +416,13 @@ export async function onTurnComplete($: any, e: any) {
   if (id) {
     const now: number = await $.clock.now()
     await mutate($, s => setAgentStatus(s, id, 'done', now))
+    // Its cubes are done (failed when the turn did not end with an answer); ready queued cubes go.
+    const isOk = e.reason === undefined || e.reason === 'answer'
+    try {
+      await finishAndRelease(deps($, now), id, isOk)
+    } catch (err) {
+      $.ui.log(`task-progress cubes: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    }
   }
 }
 
@@ -483,6 +503,61 @@ export function registerDashboard(on: any): void {
           <Text dimColor>{`  · orchestrator ${s.orchestrate ? 'on' : 'off'}`}</Text>
         </Box>
         {web ? <Text dimColor>{cut('web: ' + web.url, width)}</Text> : null}
+
+        {s.cubes ? head('Cubes', `${s.cubes.cubes.filter(x => x.status === 'proposed').length} waiting · gate ${s.cubes.gate ? 'on' : 'off'}`) : null}
+        {s.cubes && s.cubes.cubes.some(x => x.status === 'proposed') ? (
+          <Box>
+            <Button key="cubes-approve-all" label="Approve all" onPress={run({ action: 'cube.approveAll' })} />
+          </Box>
+        ) : null}
+        {s.cubes ? (
+          <Box flexDirection="row" flexWrap="wrap">
+            {s.cubes.lanes.map((lane, li) => {
+              const laneW = Math.max(24, Math.floor(width / Math.max(1, Math.min(3, s.cubes!.lanes.length))) - 1)
+              return (
+                <Box key={`lane-${li}`} flexDirection="column" width={laneW} marginRight={1}>
+                  <Text dimColor>{li === 0 ? 'lane 1 · start' : `lane ${li + 1}`}</Text>
+                  {lane.map(id => {
+                    const cb = s.cubes!.cubes.find(x => x.id === id)
+                    if (!cb) return null
+                    const col = cubeColor(cb.status)
+                    const flow = cb.flow.length > 2 ? [...cb.flow.slice(0, 2), `… +${cb.flow.length - 2} more`] : cb.flow
+                    const isOpen = cb.status === 'proposed' || cb.status === 'failed' || cb.status === 'rejected' || cb.status === 'revising'
+                    const canChange = cb.status !== 'running' && cb.status !== 'done'
+                    return (
+                      <Box key={`cube-${cb.id}`} flexDirection="column" borderStyle="round" borderColor={col} paddingX={1}>
+                        <Box>
+                          <Text bold color={col}>{cb.id + ' '}</Text>
+                          <Text>{cut(cb.title, Math.max(8, laneW - 18))}</Text>
+                          <Text dimColor>{`  ${cb.minutes}m`}</Text>
+                        </Box>
+                        <Text color={col}>{cb.status + (cb.after.length ? ' · after ' + cb.after.join(',') : '')}</Text>
+                        {flow.map((f, i) => (
+                          <Text key={`cube-${cb.id}-f${i}`} dimColor>{cut(i < 2 ? `${i + 1}. ${f}` : f, laneW - 4)}</Text>
+                        ))}
+                        {cb.note ? <Text color={C_WARN}>{cut('note: ' + cb.note, laneW - 4)}</Text> : null}
+                        {canChange ? (
+                          <Box>
+                            {isOpen ? <Button key={`cube-ok-${cb.id}`} label="Approve" onPress={run({ action: 'cube.approve', id: cb.id })} /> : null}
+                            <Button
+                              key={`cube-chg-${cb.id}`}
+                              label="Change"
+                              dimColor
+                              onPress={run({ action: 'cube.requestChange', id: cb.id, note: 'Changed from the pane — ask the user what to change' })}
+                            />
+                            {cb.status !== 'rejected' ? (
+                              <Button key={`cube-rej-${cb.id}`} label="Reject" dimColor onPress={run({ action: 'cube.reject', id: cb.id })} />
+                            ) : null}
+                          </Box>
+                        ) : null}
+                      </Box>
+                    )
+                  })}
+                </Box>
+              )
+            })}
+          </Box>
+        ) : null}
 
         {head('Plan', s.plan ? cut(s.plan.task, width - 8) : 'none')}
         {steps.map(st => {
@@ -573,4 +648,46 @@ export async function dashPlan($: any, task: string, steps: { title: string; min
 
 export async function dashMode($: any, isOn: boolean) {
   await mutate($, s => ({ ...s, orchestrate: isOn }))
+}
+
+// ---- approval cubes (the orchestrator side in register.tsx calls these) ----
+
+export async function dashGetCubes($: any): Promise<CubeBoard | null> {
+  return (await load($)).cubes ?? null
+}
+
+export async function dashCubesGate($: any): Promise<boolean> {
+  return ((await $.state.get(cubesGateRef)).value ?? 'on') === 'on'
+}
+
+/** A new board (or null to drop it). */
+export async function dashSetCubes($: any, board: CubeBoard | null) {
+  await mutate($, s => withBoard(s, board))
+  await flush($)
+}
+
+/** CubeRevise from the model. */
+export async function dashReviseCube($: any, input: any): Promise<{ ok: boolean; message: string }> {
+  const s = await load($)
+  if (!s.cubes) return { ok: false, message: 'no cube board: plan the task with TaskPlan cubes first' }
+  const r = reviseCube(s.cubes, input)
+  if ('error' in r) return { ok: false, message: r.error }
+  put($, withBoard(c.snap ?? s, r.board))
+  await flush($)
+  return { ok: true, message: r.message }
+}
+
+/** /tp-cubes on | off: the gate for the current board and new ones. */
+export async function dashSetCubesGate($: any, isOn: boolean) {
+  await $.state.set(cubesGateRef, isOn ? 'on' : 'off')
+  await mutate($, s => (s.cubes ? withBoard(s, { ...s.cubes, gate: isOn }) : s))
+}
+
+export function cubeColor(status: string): string {
+  if (status === 'approved' || status === 'queued') return C_ACCENT
+  if (status === 'running') return C_CUBE_RUN
+  if (status === 'done') return C_DONE
+  if (status === 'failed' || status === 'rejected') return C_OVER
+  if (status === 'revising') return C_WARN
+  return C_PROPOSED
 }
