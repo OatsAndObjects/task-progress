@@ -280,6 +280,115 @@ textarea { resize: vertical; }
 .toast.err { border-left-color: #FF453A; }
 @keyframes tin { from { transform: translateY(6px); opacity: 0; } }
 
+/* cube flow board */
+.cubes-card { margin-bottom: 14px; }
+.cubes-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.cubes-head h2 { font-size: 13.5px; font-weight: 650; margin: 0; letter-spacing: -.005em; }
+.cubes-task { font-weight: 650; overflow-wrap: anywhere; }
+.cubes-counts { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.cubes-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.cube-canvas { position: relative; overflow-x: auto; padding: 14px 4px 10px; margin: 0 -4px; }
+.cube-lanes { display: flex; gap: 56px; align-items: flex-start; position: relative; z-index: 1; width: max-content; min-width: 100%; }
+.lane { display: flex; flex-direction: column; gap: 22px; width: 248px; flex: none; }
+.lane-head { font-size: 11.5px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding-left: 2px; }
+.lane-then { display: none; }
+.cube-arrows { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 0; overflow: visible; }
+.cube-arrows path { fill: none; stroke: var(--faint); stroke-width: 1.6; opacity: .75; }
+.cube-arrows path.hl { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }
+.cube-arrows path.dim { opacity: .18; }
+.cube-arrows marker path { fill: var(--faint); stroke: none; }
+.cube-arrows marker.hl path { fill: var(--accent); }
+
+.cube {
+  --c-edge: #C7CCD4; --c-top: #E7EAEE; --c-side: #CDD2D9; --c-face: var(--surface); --c-ink: var(--muted);
+  position: relative; margin: 8px 8px 0 0; border: 1.5px solid var(--c-edge); border-radius: 2px;
+  background: linear-gradient(var(--c-face), var(--c-face)), var(--surface); min-height: 210px; padding: 10px 11px 9px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 6px; transition: opacity .15s, box-shadow .15s;
+}
+/* isometric top + side faces */
+.cube::before, .cube::after { content: ""; position: absolute; pointer-events: none; box-sizing: border-box; border: 1.5px solid var(--c-edge); }
+.cube::before {
+  left: -1.5px; right: -1.5px; top: -9.5px; height: 8px; background: var(--c-top);
+  transform: skewX(-45deg); transform-origin: bottom left; border-bottom: 0;
+}
+.cube::after {
+  top: -1.5px; bottom: -1.5px; right: -9.5px; width: 8px; background: var(--c-side);
+  transform: skewY(-45deg); transform-origin: top left; border-left: 0;
+}
+.cube[data-status="approved"], .cube[data-status="queued"] {
+  --c-edge: #0A84FF; --c-top: #9CCBFF; --c-side: #0A6CD6; --c-face: var(--accent-soft); --c-ink: var(--accent);
+}
+.cube[data-status="running"] {
+  --c-edge: #38BDF8; --c-top: #BAE6FD; --c-side: #7DD3FC; --c-face: rgba(125,211,252,.16); --c-ink: #0284C7;
+  animation: cubePulse 1.8s ease-in-out infinite;
+}
+.cube[data-status="done"] { --c-edge: #34C759; --c-top: #A7E8B7; --c-side: #2EA44F; --c-face: var(--green-soft); --c-ink: var(--green); }
+.cube[data-status="failed"], .cube[data-status="rejected"] { --c-edge: #FF453A; --c-top: #FFB4AE; --c-side: #D70015; --c-face: var(--red-soft); --c-ink: var(--red); }
+.cube[data-status="revising"] { --c-edge: #FF9F0A; --c-top: #FFD8A0; --c-side: #D97F00; --c-face: var(--amber-soft); --c-ink: var(--amber); }
+.cube[data-status="skipped"] { opacity: .6; }
+@keyframes cubePulse { 50% { box-shadow: 0 0 0 6px rgba(125,211,252,.28); } }
+.cube.sel { box-shadow: 0 0 0 3px var(--accent-soft), 0 6px 18px rgba(10,132,255,.18); }
+.cube.dim { opacity: .38; }
+.cube.drop-target { outline: 2px dashed var(--accent); outline-offset: 4px; }
+.cube.dragging { opacity: .45; }
+.cube-top { display: flex; align-items: center; gap: 6px; }
+.cube-id { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: var(--c-ink); }
+.cube-min { font-size: 11.5px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.cube-title { font-weight: 650; font-size: 13.5px; line-height: 1.3; overflow-wrap: anywhere; }
+.cube-title .tick { color: var(--green); margin-right: 4px; }
+.cube-flow { list-style: none; margin: 0; padding: 0 0 0 2px; counter-reset: fl; }
+.cube-flow li {
+  position: relative; padding: 0 0 3px 20px; font-size: 12px; color: var(--text); counter-increment: fl;
+  overflow-wrap: anywhere; line-height: 1.35;
+}
+.cube-flow li::before {
+  content: counter(fl); position: absolute; left: 0; top: 1px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--surface-2); border: 1px solid var(--c-edge); font-size: 9px; font-weight: 700; display: grid; place-items: center; color: var(--c-ink);
+}
+.cube-flow li:not(:last-child)::after { content: ""; position: absolute; left: 7px; top: 15px; bottom: 0; width: 1px; background: var(--border); }
+.cube-flow .more { padding-left: 20px; font-size: 11.5px; color: var(--muted); }
+.cube-flow .more::before, .cube-flow .more::after { display: none; }
+.cube-done { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.cube-done b { color: var(--text); font-weight: 600; }
+.cube-note { font-size: 11.5px; background: var(--amber-soft); color: var(--text); border-radius: 6px; padding: 4px 7px; overflow-wrap: anywhere; }
+.cube-wait { font-size: 11.5px; color: var(--amber); font-weight: 600; }
+.cube-meta { font-size: 11px; color: var(--faint); margin-top: auto; }
+.cube-acts { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; padding-top: 6px; border-top: 1px solid var(--border); }
+.cube-acts .btn { padding: 2px 7px; font-size: 12px; }
+.chip.proposed { background: var(--gray-soft); color: var(--muted); }
+.chip.approved, .chip.queued { background: var(--accent-soft); color: var(--accent); }
+.chip.rejected { background: var(--red-soft); color: var(--red); }
+.chip.revising { background: var(--amber-soft); color: var(--amber); }
+
+/* drawer */
+.drawer-back { position: fixed; inset: 0; background: rgba(15,18,24,.38); z-index: 60; display: none; }
+.drawer-back.show { display: block; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); background: var(--surface);
+  border-left: 1px solid var(--border); box-shadow: -10px 0 40px rgba(0,0,0,.18); z-index: 61;
+  display: none; flex-direction: column;
+}
+.drawer.show { display: flex; }
+.drawer-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.drawer-head h3 { margin: 0; font-size: 15px; flex: 1; }
+.drawer-body { padding: 14px 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.drawer-foot { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.fld { display: flex; flex-direction: column; gap: 4px; }
+.fld > label, .fld > .lbl { font-size: 12px; font-weight: 600; color: var(--muted); }
+.fld input[type="text"], .fld textarea { width: 100%; }
+.flow-rows { display: flex; flex-direction: column; gap: 6px; }
+.flow-row { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; gap: 6px; align-items: center; }
+.flow-row .n { font-size: 11.5px; font-weight: 700; color: var(--muted); text-align: right; }
+.flow-row .ctl { display: flex; gap: 2px; }
+.after-list { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
+.after-list label { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.after-list label.off { color: var(--faint); }
+.min-row { display: flex; gap: 10px; align-items: center; }
+.min-row input[type="range"] { flex: 1; }
+.min-row input[type="number"] { width: 64px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; }
+.form-err { display: none; background: var(--red-soft); color: var(--red); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.form-err.show { display: block; }
+
 @media (max-width: 980px) {
   .overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .grid { grid-template-columns: minmax(0, 1fr); }
@@ -295,6 +404,11 @@ textarea { resize: vertical; }
   .hide-sm { display: none; }
   .log-row { grid-template-columns: 56px auto minmax(0,1fr); }
   .log-row .agent-tag { display: none; }
+  .cube-lanes { flex-direction: column; gap: 6px; width: auto; }
+  .lane { width: 100%; }
+  .lane-then { display: block; text-align: center; color: var(--muted); font-size: 12px; font-weight: 600; padding: 2px 0 4px; }
+  .cube-arrows { display: none; }
+  .cube { min-height: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
@@ -317,6 +431,22 @@ textarea { resize: vertical; }
   </header>
 
   <div class="banner" id="banner" role="alert"></div>
+
+  <section class="card cubes-card" aria-label="Cubes">
+    <div class="cubes-head">
+      <h2>Cubes</h2>
+      <span class="cubes-task" id="cubesTask"></span>
+      <div class="cubes-counts" id="cubesCounts"></div>
+      <div class="cubes-tools" id="cubesTools" hidden>
+        <button class="switch" id="gateToggle" role="switch" aria-checked="false" type="button" title="When on, each cube waits for your approval before it runs">
+          <span class="track" aria-hidden="true"></span><span>Approval required</span>
+        </button>
+        <button class="btn" type="button" id="cubeAddBtn">+ Add cube</button>
+        <button class="btn primary" type="button" id="approveAllBtn">Approve all</button>
+      </div>
+    </div>
+    <div id="cubes"></div>
+  </section>
 
   <section class="card progress-card" aria-label="Progress">
     <div class="progress-line">
@@ -400,6 +530,20 @@ textarea { resize: vertical; }
   </div>
 </div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="drawer-back" id="drawerBack"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+  <div class="drawer-head">
+    <h3 id="drawerTitle">Edit cube</h3>
+    <button class="btn ghost icon" type="button" id="drawerClose" aria-label="Close">✕</button>
+  </div>
+  <form id="drawerForm" autocomplete="off" style="display: contents">
+    <div class="drawer-body" id="drawerBody"></div>
+    <div class="drawer-foot">
+      <button class="btn" type="button" id="drawerCancel">Cancel</button>
+      <button class="btn primary" type="submit" id="drawerSave">Save</button>
+    </div>
+  </form>
+</aside>
 
 <script>
 (function () {
@@ -521,6 +665,11 @@ textarea { resize: vertical; }
 
   // Sends a command, toasts the reply, keeps `key` (and its buttons) disabled while in flight.
   function command(action, args, key, btn) {
+    return commandResult(action, args, key, btn, false).then(function (r) { return r ? r.ok : null; });
+  }
+
+  // Like command(), but resolves to { ok, message }. quietFail: do not toast a failure (the caller shows it).
+  function commandResult(action, args, key, btn, quietFail) {
     key = key || action;
     if (pending[key]) return Promise.resolve(null);
     pending[key] = true;
@@ -530,16 +679,16 @@ textarea { resize: vertical; }
       var d = r.data || {};
       var ok = r.status === 200 && d.ok === true;
       var msg = d.message || (ok ? 'Done' : r.status === 504 ? 'Claude Code did not answer in time' : 'Failed (' + r.status + ')');
-      toast(msg, ok);
-      return ok;
+      if (ok || !quietFail) toast(msg, ok);
+      return { ok: ok, message: msg };
     }).catch(function () {
-      toast('Could not reach the dashboard server', false);
-      return false;
-    }).then(function (ok) {
+      if (!quietFail) toast('Could not reach the dashboard server', false);
+      return { ok: false, message: 'Could not reach the dashboard server' };
+    }).then(function (res) {
       delete pending[key];
       if (btn && btn.isConnected) btn.disabled = false;
       render();
-      return ok;
+      return res;
     });
   }
 
@@ -596,6 +745,7 @@ textarea { resize: vertical; }
 
   function render() {
     var s = snap || {};
+    if (cubeDrag) dirtyCubes = true; else renderCubes(s);
     renderHeader(s);
     renderOverview(s);
     renderPlan(s);
@@ -1040,6 +1190,485 @@ textarea { resize: vertical; }
     });
     el.addEventListener('blur', function () { finish(true); });
   }
+
+  // ---------- cubes ----------
+  var cubeSel = null;      // selected cube id: highlights what it waits for and what waits for it
+  var cubeDrag = null;     // cube id while dragging
+  var dirtyCubes = false;
+  var cubeExpand = {};     // cube id -> true when its whole flow is shown
+  var drawer = null;       // { mode: 'edit'|'add'|'ask', id, base, model }
+  var drawerReturn = null; // element to refocus when the drawer closes
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var CUBE_EDITABLE = { proposed: 1, approved: 1, queued: 1, revising: 1, rejected: 1, failed: 1 };
+  var CUBE_FINISHED = { done: 1, skipped: 1 };
+
+  function cubeBoard(s) { var b = s && s.cubes; return b && typeof b === 'object' ? b : null; }
+  function cubeList(b) { return arr(b && b.cubes).filter(function (c) { return c && typeof c.id === 'string'; }); }
+  function cubeMap(list) { var m = {}; list.forEach(function (c) { m[c.id] = c; }); return m; }
+
+  // Every cube `id` must wait for (transitively).
+  function upstreamOf(id, m) {
+    var out = {}, stack = arr(m[id] && m[id].after).slice();
+    while (stack.length) {
+      var x = stack.pop();
+      if (out[x] || !m[x] || x === id) continue;
+      out[x] = 1;
+      stack = stack.concat(arr(m[x].after));
+    }
+    return out;
+  }
+  // Every cube that waits (transitively) for `id`.
+  function downstreamOf(id, list) {
+    var out = {}, frontier = [id];
+    while (frontier.length) {
+      var cur = frontier.pop();
+      list.forEach(function (c) {
+        if (!out[c.id] && c.id !== id && arr(c.after).indexOf(cur) >= 0) { out[c.id] = 1; frontier.push(c.id); }
+      });
+    }
+    return out;
+  }
+
+  // Lanes from the snapshot; any cube it leaves out goes to the lane of its dependency depth.
+  function lanesOf(b, list, m) {
+    var lanes = arr(b.lanes).map(function (l) { return arr(l).filter(function (id) { return m[id]; }); });
+    var seen = {};
+    lanes.forEach(function (l) { l.forEach(function (id) { seen[id] = 1; }); });
+    var depthMemo = {};
+    function depth(id, guard) {
+      if (depthMemo[id] !== undefined) return depthMemo[id];
+      if (guard[id]) return 0;
+      guard[id] = 1;
+      var d = 0;
+      arr(m[id] && m[id].after).forEach(function (a) { if (m[a]) d = Math.max(d, depth(a, guard) + 1); });
+      depthMemo[id] = d;
+      return d;
+    }
+    list.forEach(function (c) {
+      if (seen[c.id]) return;
+      var d = depth(c.id, {});
+      while (lanes.length <= d) lanes.push([]);
+      lanes[d].push(c.id);
+    });
+    return lanes.filter(function (l) { return l.length; });
+  }
+
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) el.setAttribute(k, String(attrs[k]));
+    return el;
+  }
+
+  function renderCubes(s) {
+    dirtyCubes = false;
+    var b = cubeBoard(s);
+    var box = $('cubes');
+    $('cubesTools').hidden = !b;
+    if (!b) {
+      setText('cubesTask', '');
+      $('cubesCounts').replaceChildren();
+      box.replaceChildren(h('div', { class: 'empty', text: 'No cube plan yet — give Claude a task.' }));
+      return;
+    }
+    var list = cubeList(b), m = cubeMap(list);
+    if (cubeSel && !m[cubeSel]) cubeSel = null;
+    setText('cubesTask', b.task ? '· ' + b.task : '');
+    function cnt(sts) { return list.filter(function (c) { return sts.indexOf(c.status || 'proposed') >= 0; }).length; }
+    var proposedN = cnt(['proposed']);
+    $('cubesCounts').replaceChildren(
+      h('span', { class: 'chip proposed', text: cnt(['proposed', 'revising']) + ' waiting' }),
+      h('span', { class: 'chip approved', text: cnt(['approved', 'queued']) + ' approved' }),
+      h('span', { class: 'chip running', text: cnt(['running']) + ' running' }),
+      h('span', { class: 'chip done', text: cnt(['done']) + ' done' }));
+    var gate = $('gateToggle');
+    gate.setAttribute('aria-checked', b.gate ? 'true' : 'false');
+    gate.disabled = !!pending['cubes.gate'];
+    var aa = $('approveAllBtn');
+    aa.disabled = !!pending['cube.approveAll'] || !proposedN;
+    aa.textContent = pending['cube.approveAll'] ? 'Approving…' : 'Approve all' + (proposedN ? ' (' + proposedN + ')' : '');
+
+    if (!list.length) { box.replaceChildren(h('div', { class: 'empty', text: 'This plan has no cubes yet. Add one.' })); return; }
+
+    var up = cubeSel ? upstreamOf(cubeSel, m) : {}, down = cubeSel ? downstreamOf(cubeSel, list) : {};
+    var laneEls = [];
+    lanesOf(b, list, m).forEach(function (ids, i) {
+      if (i > 0) laneEls.push(h('div', { class: 'lane-then', 'aria-hidden': 'true', text: '↓ then' }));
+      var lane = h('div', { class: 'lane', 'aria-label': 'Stage ' + (i + 1) },
+        h('div', { class: 'lane-head', text: 'Stage ' + (i + 1) + (i === 0 ? ' · start' : '') }));
+      ids.forEach(function (id) { lane.appendChild(cubeCard(m[id], m, list, up, down)); });
+      laneEls.push(lane);
+    });
+    var old = $('cubeCanvas');
+    var keepScroll = old ? old.scrollLeft : 0;
+    var svg = svgEl('svg', { class: 'cube-arrows', 'aria-hidden': 'true' });
+    var canvas = h('div', { class: 'cube-canvas', id: 'cubeCanvas' }, svg, h('div', { class: 'cube-lanes' }, laneEls));
+    canvas.addEventListener('click', function (e) {
+      if (cubeSel && !e.target.closest('.cube')) { cubeSel = null; renderCubes(snap || {}); tick(); }
+    });
+    var hint = h('div', { class: 'hint', text: cubeSel
+      ? 'Showing what ' + cubeSel + ' waits for and what waits for it. Click it again to clear.'
+      : 'Click a cube to see its flow. Drag a cube onto another to make it wait for that one.' });
+    box.replaceChildren(canvas, hint);
+    canvas.scrollLeft = keepScroll;
+    drawArrows();
+  }
+
+  function drawArrows() {
+    var canvas = $('cubeCanvas');
+    var b = cubeBoard(snap);
+    if (!canvas || !b) return;
+    var svg = canvas.querySelector('svg.cube-arrows');
+    if (!svg) return;
+    if (getComputedStyle(svg).display === 'none') { svg.replaceChildren(); return; }
+    var list = cubeList(b), m = cubeMap(list);
+    var up = cubeSel ? upstreamOf(cubeSel, m) : {}, down = cubeSel ? downstreamOf(cubeSel, list) : {};
+    var cr = canvas.getBoundingClientRect();
+    var ox = cr.left - canvas.scrollLeft, oy = cr.top - canvas.scrollTop;
+    var w = canvas.scrollWidth, ht = canvas.scrollHeight;
+    svg.setAttribute('width', w); svg.setAttribute('height', ht); svg.setAttribute('viewBox', '0 0 ' + w + ' ' + ht);
+    var defs = svgEl('defs', {});
+    ['arw', 'arw-hl'].forEach(function (mid) {
+      var mk = svgEl('marker', { id: mid, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' });
+      if (mid === 'arw-hl') mk.setAttribute('class', 'hl');
+      mk.appendChild(svgEl('path', { d: 'M0,0 L10,5 L0,10 z' }));
+      defs.appendChild(mk);
+    });
+    var kids = [defs];
+    var cards = {};
+    canvas.querySelectorAll('.cube[data-id]').forEach(function (el) { cards[el.dataset.id] = el; });
+    list.forEach(function (c) {
+      arr(c.after).forEach(function (dep) {
+        var a = cards[dep], t = cards[c.id];
+        if (!a || !t) return;
+        var ra = a.getBoundingClientRect(), rt = t.getBoundingClientRect();
+        var x1 = ra.right - ox + 9, y1 = ra.top - oy + Math.min(ra.height / 2, 60);
+        var x2 = rt.left - ox - 3, y2 = rt.top - oy + Math.min(rt.height / 2, 60);
+        var dx = Math.max(24, Math.abs(x2 - x1) / 2);
+        var cls = '';
+        if (cubeSel) {
+          var onUp = (dep === cubeSel || up[dep]) && (c.id === cubeSel || up[c.id]);
+          var onDown = (dep === cubeSel || down[dep]) && down[c.id];
+          cls = onUp || onDown ? 'hl' : 'dim';
+        }
+        kids.push(svgEl('path', { d: 'M' + x1 + ',' + y1 + ' C' + (x1 + dx) + ',' + y1 + ' ' + (x2 - dx) + ',' + y2 + ' ' + x2 + ',' + y2,
+          class: cls, 'marker-end': 'url(#' + (cls === 'hl' ? 'arw-hl' : 'arw') + ')' }));
+      });
+    });
+    svg.replaceChildren.apply(svg, kids);
+  }
+
+  var arrowFrame = 0;
+  function scheduleArrows() {
+    if (arrowFrame) return;
+    arrowFrame = requestAnimationFrame(function () { arrowFrame = 0; drawArrows(); });
+  }
+  window.addEventListener('resize', scheduleArrows);
+  if (window.ResizeObserver) new ResizeObserver(scheduleArrows).observe($('cubes'));
+
+  function cubeCard(c, m, list, up, down) {
+    var st = c.status || 'proposed';
+    var cls = 'cube';
+    if (cubeSel) {
+      if (c.id === cubeSel) cls += ' sel';
+      else if (!(up[c.id] || down[c.id])) cls += ' dim';
+    }
+    var canEdit = !!CUBE_EDITABLE[st];
+    var card = h('article', { class: cls, tabindex: '0', dataset: { id: c.id, status: st },
+      'aria-label': 'Cube ' + c.id + ': ' + (c.title || '') + ', ' + st, draggable: canEdit ? 'true' : null });
+
+    var mins = c.startedAt ? timeCell(c.startedAt, c.endedAt, c.minutes || 0)
+      : h('span', { text: (c.minutes ? fmtMin(c.minutes) : '?') + ' min' });
+    card.appendChild(h('div', { class: 'cube-top' },
+      h('span', { class: 'cube-id', text: c.id }),
+      h('span', { class: 'chip ' + st, text: st }),
+      h('span', { class: 'cube-min' }, mins)));
+    card.appendChild(h('div', { class: 'cube-title', title: c.action || '' },
+      st === 'done' ? h('span', { class: 'tick', text: '✓' }) : null, c.title || '(untitled)'));
+
+    var flow = arr(c.flow);
+    if (flow.length) {
+      var ol = h('ol', { class: 'cube-flow' });
+      var show = cubeExpand[c.id] ? flow : flow.slice(0, 3);
+      show.forEach(function (f) { ol.appendChild(h('li', { text: String(f) })); });
+      if (flow.length > 3) {
+        ol.appendChild(h('li', { class: 'more' }, h('button', { class: 'btn ghost', type: 'button', style: 'padding: 0 4px; font-size: 11.5px',
+          text: cubeExpand[c.id] ? 'show less' : '+' + (flow.length - 3) + ' more',
+          onclick: function (e) { e.stopPropagation(); cubeExpand[c.id] = !cubeExpand[c.id]; renderCubes(snap || {}); tick(); } })));
+      }
+      card.appendChild(ol);
+    }
+    if (c.doneWhen) card.appendChild(h('div', { class: 'cube-done' }, h('b', { text: 'Done when ' }), String(c.doneWhen)));
+    var files = arr(c.files);
+    if (files.length) {
+      card.appendChild(h('div', { class: 'sub mono', style: 'font-size: 11px; overflow-wrap: anywhere', title: files.join('\n'),
+        text: files.slice(0, 2).map(function (f) { return String(f).split(/[\\/]/).pop(); }).join(', ') + (files.length > 2 ? ' +' + (files.length - 2) : '') }));
+    }
+    if (c.note) card.appendChild(h('div', { class: 'cube-note', text: String(c.note) }));
+
+    var waits = arr(c.after).filter(function (d) { return !m[d] || !CUBE_FINISHED[m[d].status]; });
+    if (waits.length && (st === 'proposed' || st === 'approved' || st === 'queued' || st === 'revising')) {
+      card.appendChild(h('div', { class: 'cube-wait', text: (st === 'approved' || st === 'queued' ? 'queued · ' : '') + 'waits for ' + waits.join(', ') }));
+    }
+    var by = c.editedBy === 'user' ? 'edited by you' : c.editedBy === 'claude' ? 'edited by Claude' : 'proposed by Claude';
+    card.appendChild(h('div', { class: 'cube-meta' }, by + ' · v' + (c.version || 1),
+      c.agentId ? h('span', { class: 'agent-tag', title: c.agentId, text: ' · ' + shortId(c.agentId) }) : null));
+    var acts = cubeActions(c, st);
+    if (acts) card.appendChild(acts);
+
+    function toggleSel() { cubeSel = cubeSel === c.id ? null : c.id; renderCubes(snap || {}); tick(); }
+    card.addEventListener('click', function (e) { if (!e.target.closest('button, input, textarea')) toggleSel(); });
+    card.addEventListener('keydown', function (e) {
+      if (e.target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleSel(); }
+    });
+
+    // drag onto another cube = "this waits for that one"
+    card.addEventListener('dragstart', function (e) {
+      cubeDrag = c.id;
+      e.dataTransfer.effectAllowed = 'link';
+      try { e.dataTransfer.setData('text/plain', c.id); } catch (err) {}
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', function () {
+      card.classList.remove('dragging');
+      cubeDrag = null;
+      document.querySelectorAll('.cube.drop-target').forEach(function (x) { x.classList.remove('drop-target'); });
+      if (dirtyCubes) { renderCubes(snap || {}); tick(); }
+    });
+    card.addEventListener('dragover', function (e) {
+      if (!cubeDrag || cubeDrag === c.id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'link';
+      card.classList.add('drop-target');
+    });
+    card.addEventListener('dragleave', function (e) { if (!card.contains(e.relatedTarget)) card.classList.remove('drop-target'); });
+    card.addEventListener('drop', function (e) {
+      e.preventDefault();
+      card.classList.remove('drop-target');
+      var from = cubeDrag;
+      cubeDrag = null;
+      var src = from && m[from];
+      if (!src || from === c.id) return;
+      if (arr(src.after).indexOf(c.id) >= 0) { toast(from + ' already waits for ' + c.id, false); return; }
+      if (downstreamOf(from, list)[c.id]) { toast(c.id + ' already waits for ' + from + ' — that would make a loop', false); return; }
+      command('cube.move', { id: from, after: arr(src.after).concat([c.id]) }, 'cube:' + from);
+    });
+    return card;
+  }
+
+  function cubeActions(c, st) {
+    if (!CUBE_EDITABLE[st]) return null;
+    var key = 'cube:' + c.id, busy = !!pending[key];
+    var cfKey = 'cubecf:' + c.id;
+    var acts = h('div', { class: 'cube-acts' });
+    acts.addEventListener('click', function (e) { e.stopPropagation(); });
+    var cf = confirming[cfKey];
+    if (cf) {
+      acts.appendChild(h('span', { class: 'confirm' }, cf === 'reject' ? 'Reject ' + c.id + '?' : 'Delete ' + c.id + '?',
+        h('button', { class: 'btn danger solid', type: 'button', text: 'Yes', onclick: function (e) {
+          delete confirming[cfKey];
+          command(cf === 'reject' ? 'cube.reject' : 'cube.delete', { id: c.id }, key, e.currentTarget);
+        } }),
+        h('button', { class: 'btn', type: 'button', text: 'No', onclick: function () { delete confirming[cfKey]; renderCubes(snap || {}); tick(); } })));
+      return acts;
+    }
+    if (st === 'proposed' || st === 'rejected' || st === 'failed') {
+      acts.appendChild(h('button', { class: 'btn primary', type: 'button', disabled: busy, text: busy ? '…' : '✓ Approve', title: 'Approve this cube',
+        onclick: function (e) { command('cube.approve', { id: c.id }, key, e.currentTarget); } }));
+    }
+    acts.appendChild(h('button', { class: 'btn', type: 'button', disabled: busy, text: '✎', title: 'Edit cube', 'aria-label': 'Edit ' + c.id,
+      onclick: function (e) { openDrawer('edit', c, e.currentTarget); } }));
+    if (st !== 'revising') {
+      acts.appendChild(h('button', { class: 'btn', type: 'button', disabled: busy, text: '💬', title: 'Ask Claude to change it', 'aria-label': 'Ask Claude to change ' + c.id,
+        onclick: function (e) { openDrawer('ask', c, e.currentTarget); } }));
+    }
+    if (st !== 'rejected') {
+      acts.appendChild(h('button', { class: 'btn danger', type: 'button', disabled: busy, text: '✕', title: 'Reject cube', 'aria-label': 'Reject ' + c.id,
+        onclick: function () { confirming[cfKey] = 'reject'; renderCubes(snap || {}); tick(); } }));
+    }
+    acts.appendChild(h('button', { class: 'btn ghost danger', type: 'button', disabled: busy, text: '🗑', title: 'Delete cube', 'aria-label': 'Delete ' + c.id,
+      onclick: function () { confirming[cfKey] = 'delete'; renderCubes(snap || {}); tick(); } }));
+    return acts;
+  }
+
+  // ---------- cube drawer (edit / add / ask) ----------
+  function clampMin(v) { v = Math.round(Number(v)); return v >= 1 && v <= 10 ? v : (v > 10 ? 10 : 5); }
+
+  function openDrawer(mode, c, from) {
+    drawerReturn = from || document.activeElement;
+    drawer = {
+      mode: mode, id: c ? c.id : null, base: c || null,
+      model: c ? { title: c.title || '', action: c.action || '', flow: arr(c.flow).map(String), after: arr(c.after).slice(),
+        doneWhen: c.doneWhen || '', files: arr(c.files).join(', '), minutes: clampMin(c.minutes || 5), note: '' }
+        : { title: '', action: '', flow: ['', ''], after: [], doneWhen: '', files: '', minutes: 5, note: '' }
+    };
+    if (!drawer.model.flow.length) drawer.model.flow = [''];
+    setText('drawerTitle', mode === 'add' ? 'Add cube' : mode === 'ask' ? 'Ask Claude to change ' + c.id : 'Edit ' + c.id);
+    $('drawerSave').textContent = mode === 'ask' ? 'Send to Claude' : mode === 'add' ? 'Add cube' : 'Save';
+    buildDrawer();
+    $('drawerBack').classList.add('show');
+    $('drawer').classList.add('show');
+    var first = $('drawerBody').querySelector('input, textarea');
+    if (first) first.focus();
+  }
+
+  function closeDrawer() {
+    drawer = null;
+    $('drawer').classList.remove('show');
+    $('drawerBack').classList.remove('show');
+    if (drawerReturn && drawerReturn.isConnected) drawerReturn.focus();
+    drawerReturn = null;
+  }
+
+  function drawerErr(msg) {
+    var el = $('drawerErr');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('show', !!msg);
+  }
+
+  function bound(input, field) {
+    input.addEventListener('input', function () { if (drawer) drawer.model[field] = input.value; });
+    return input;
+  }
+
+  function buildDrawer() {
+    var d = drawer, md = d.model;
+    var body = $('drawerBody');
+    var kids = [h('div', { class: 'form-err', id: 'drawerErr', role: 'alert' })];
+    if (d.mode === 'ask') {
+      kids.push(h('div', { class: 'sub' }, h('b', { text: d.id + ' · ' }), d.base.title || ''));
+      var ta = h('textarea', { rows: '5', maxlength: '2000', id: 'fNote', placeholder: 'e.g. Split this into two cubes, or check the tests first' });
+      ta.value = md.note;
+      kids.push(h('div', { class: 'fld' }, h('label', { for: 'fNote', text: 'What should change?' }), bound(ta, 'note'),
+        h('div', { class: 'hint', text: 'Claude rewrites the cube and shows it to you again for approval.' })));
+      body.replaceChildren.apply(body, kids);
+      return;
+    }
+    var ti = h('input', { type: 'text', id: 'fTitle', maxlength: '300', value: md.title });
+    kids.push(h('div', { class: 'fld' }, h('label', { for: 'fTitle', text: 'Title' }), bound(ti, 'title')));
+    var ac = h('textarea', { rows: '3', id: 'fAction', maxlength: '2000' });
+    ac.value = md.action;
+    kids.push(h('div', { class: 'fld' }, h('label', { for: 'fAction', text: 'Action (what this cube does)' }), bound(ac, 'action')));
+
+    var rows = h('div', { class: 'flow-rows' });
+    md.flow.forEach(function (step, i) {
+      var inp = h('input', { type: 'text', maxlength: '300', value: step, 'aria-label': 'Flow step ' + (i + 1) });
+      inp.addEventListener('input', function () { md.flow[i] = inp.value; });
+      function mv(delta) {
+        var j = i + delta;
+        if (j < 0 || j >= md.flow.length) return;
+        var t = md.flow[i]; md.flow[i] = md.flow[j]; md.flow[j] = t;
+        buildDrawer();
+        var again = $('drawerBody').querySelectorAll('.flow-row input')[j];
+        if (again) again.focus();
+      }
+      rows.appendChild(h('div', { class: 'flow-row' },
+        h('span', { class: 'n', text: (i + 1) + '.' }), inp,
+        h('span', { class: 'ctl' },
+          h('button', { class: 'btn icon ghost', type: 'button', text: '↑', 'aria-label': 'Move step up', disabled: i === 0, onclick: function () { mv(-1); } }),
+          h('button', { class: 'btn icon ghost', type: 'button', text: '↓', 'aria-label': 'Move step down', disabled: i === md.flow.length - 1, onclick: function () { mv(1); } }),
+          h('button', { class: 'btn icon ghost danger', type: 'button', text: '✕', 'aria-label': 'Remove step', disabled: md.flow.length <= 1,
+            onclick: function () { md.flow.splice(i, 1); buildDrawer(); } }))));
+    });
+    kids.push(h('div', { class: 'fld' }, h('span', { class: 'lbl', text: 'Flow (2-6 small steps, in order)' }), rows,
+      h('div', null, h('button', { class: 'btn', type: 'button', text: '+ Add step', disabled: md.flow.length >= 6, onclick: function () {
+        md.flow.push(''); buildDrawer();
+        var all = $('drawerBody').querySelectorAll('.flow-row input');
+        if (all.length) all[all.length - 1].focus();
+      } }))));
+
+    var b = cubeBoard(snap), list = cubeList(b);
+    var loop = d.id ? downstreamOf(d.id, list) : {};
+    var others = list.filter(function (c) { return c.id !== d.id; });
+    var al = h('div', { class: 'after-list' });
+    if (!others.length) al.appendChild(h('div', { class: 'empty', text: 'No other cubes.' }));
+    others.forEach(function (c) {
+      var off = !!loop[c.id];
+      var cb = h('input', { type: 'checkbox', disabled: off, checked: md.after.indexOf(c.id) >= 0 });
+      cb.addEventListener('change', function () {
+        var k = md.after.indexOf(c.id);
+        if (cb.checked && k < 0) md.after.push(c.id);
+        if (!cb.checked && k >= 0) md.after.splice(k, 1);
+      });
+      al.appendChild(h('label', { class: off ? 'off' : '', title: off ? c.id + ' already waits for this cube' : '' }, cb,
+        h('span', null, h('b', { class: 'mono', text: c.id + ' ' }), c.title || '', off ? ' (waits for this one)' : '')));
+    });
+    kids.push(h('div', { class: 'fld' }, h('span', { class: 'lbl', text: 'Runs after' }), al));
+
+    var dw = h('input', { type: 'text', id: 'fDone', maxlength: '1000', value: md.doneWhen, placeholder: 'e.g. node --check passes' });
+    kids.push(h('div', { class: 'fld' }, h('label', { for: 'fDone', text: 'Done when' }), bound(dw, 'doneWhen')));
+    var fi = h('input', { type: 'text', id: 'fFiles', value: md.files, placeholder: 'src/a.js, src/b.js' });
+    kids.push(h('div', { class: 'fld' }, h('label', { for: 'fFiles', text: 'Files (comma separated, optional)' }), bound(fi, 'files')));
+
+    var rg = h('input', { type: 'range', min: '1', max: '10', step: '1', value: String(md.minutes), 'aria-label': 'Minutes' });
+    var nm = h('input', { type: 'number', min: '1', max: '10', step: '1', value: String(md.minutes), id: 'fMin' });
+    rg.addEventListener('input', function () { md.minutes = clampMin(rg.value); nm.value = String(md.minutes); });
+    nm.addEventListener('input', function () { if (nm.value !== '') { md.minutes = clampMin(nm.value); rg.value = String(md.minutes); } });
+    kids.push(h('div', { class: 'fld' }, h('label', { for: 'fMin', text: 'Minutes (1-10)' }), h('div', { class: 'min-row' }, rg, nm)));
+    body.replaceChildren.apply(body, kids);
+  }
+
+  function saveDrawer() {
+    var d = drawer;
+    if (!d) return;
+    var md = d.model, btn = $('drawerSave');
+    drawerErr('');
+    function send(action, args) {
+      commandResult(action, args, 'drawer', btn, true).then(function (r) {
+        if (!r) return;
+        if (r.ok) { if (drawer === d) closeDrawer(); }
+        else if (drawer === d) drawerErr(r.message);
+      });
+    }
+    if (d.mode === 'ask') {
+      var note = md.note.trim();
+      if (!note) { drawerErr('Write what should change.'); return; }
+      send('cube.requestChange', { id: d.id, note: note });
+      return;
+    }
+    var full = {
+      title: md.title.trim(), actionText: md.action.trim(),
+      flow: md.flow.map(function (x) { return x.trim(); }).filter(Boolean),
+      after: md.after.slice(), doneWhen: md.doneWhen.trim(),
+      files: md.files.split(',').map(function (x) { return x.trim(); }).filter(Boolean),
+      minutes: clampMin(md.minutes)
+    };
+    if (!full.title) return drawerErr('Give the cube a title.');
+    if (!full.actionText) return drawerErr('Say what the cube does.');
+    if (full.flow.length < 2) return drawerErr('Give at least 2 flow steps.');
+    if (full.flow.length > 6) return drawerErr('At most 6 flow steps — split the cube instead.');
+    if (!full.doneWhen) return drawerErr('Say how we know it is done.');
+    if (d.mode === 'add') {
+      var args = Object.assign({}, full);
+      if (!args.after.length) delete args.after;
+      if (!args.files.length) delete args.files;
+      send('cube.add', args);
+      return;
+    }
+    var base = d.base, was = {
+      title: base.title || '', actionText: base.action || '', flow: arr(base.flow).map(String), after: arr(base.after),
+      doneWhen: base.doneWhen || '', files: arr(base.files).map(String), minutes: base.minutes
+    };
+    var upd = { id: d.id }, changed = 0;
+    Object.keys(full).forEach(function (k) {
+      if (JSON.stringify(full[k]) !== JSON.stringify(was[k])) { upd[k] = full[k]; changed++; }
+    });
+    if (!changed) { closeDrawer(); toast('No changes', true); return; }
+    send('cube.update', upd);
+  }
+
+  $('drawerForm').addEventListener('submit', function (e) { e.preventDefault(); saveDrawer(); });
+  $('drawerClose').addEventListener('click', closeDrawer);
+  $('drawerCancel').addEventListener('click', closeDrawer);
+  $('drawerBack').addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && drawer) { e.preventDefault(); closeDrawer(); } });
+  $('cubeAddBtn').addEventListener('click', function (e) { openDrawer('add', null, e.currentTarget); });
+  $('approveAllBtn').addEventListener('click', function (e) { command('cube.approveAll', {}, 'cube.approveAll', e.currentTarget); });
+  $('gateToggle').addEventListener('click', function (e) {
+    var b = cubeBoard(snap);
+    if (!b) return;
+    command('cubes.gate', { on: !b.gate }, 'cubes.gate', e.currentTarget);
+  });
 
   // ---------- static controls ----------
   $('orchToggle').addEventListener('click', function (e) {

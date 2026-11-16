@@ -37,6 +37,29 @@ Panels (pane and web app read the same snapshot):
 
 Security of the web app: it binds 127.0.0.1 only; every `/api/*` call needs a random per-session token (32 hex characters, header `X-TP-Token` or `?t=`, wrong token = 401); the Host header must be `127.0.0.1:<port>` or `localhost:<port>` (DNS-rebinding guard) and a browser Origin, when sent, must be the same origin (403 otherwise); bodies are capped at 1 MB and commands are validated against a fixed action list. It exits on its own about 35 s after the mod stops sending snapshots. Details: `web/README.md`.
 
+## Approval cubes (0.7.0)
+
+For a multi-action task, Claude calls `TaskPlan` with `cubes` instead of plain steps and then stops. Each cube is one small, checkable piece of work, and nothing runs until you approve it.
+
+**How a task becomes cubes.** A cube has an `id` (c1, c2, ...), a `title`, one `action` sentence, a `flow` of 2-6 ordered micro-steps, `after` (cubes that must finish first), `doneWhen` (a check that proves it is done), optional `files`, and `minutes` (at most 10). The cubes form a graph; the plan section and the progress bar mirror it, one step per cube.
+
+**Atomic rules.** The plan is refused whole, naming the cube to fix, when a cube has no action, an action over 200 characters, fewer than 2 or more than 6 flow steps ("Give cube cX at least 2 flow steps"), no `doneWhen`, no minutes or more than 10, or when ids repeat, `after` names an unknown cube, there is a cycle, or there are more than 40 cubes.
+
+**What you can do** (in the `/tp-dashboard` pane or the web app):
+
+- **Approve**: runs when its dependencies are done; otherwise it is **queued** and starts by itself once they finish. All cubes that become ready at once go to Claude in one prompt.
+- **Approve all**: approves every proposed cube; ready ones go out together, the rest queue.
+- **Edit**: change any field. An edit to an approved or queued cube sends it back to proposed with a new version. Edits must stay atomic.
+- **Ask for a change**: write a note; the cube turns to revising and Claude answers with `CubeRevise` (change fields, or split it with `splitInto`; cubes that waited on it then wait on the last piece). It comes back to you as proposed.
+- **Reject**: blocks the cubes that depend on it until you edit or delete it.
+- **Delete / Add / Move**: delete rewires `after` of the cubes that waited on it; add makes the next free id; moving (changing `after`) is refused if it would make a cycle. Running and finished cubes cannot be changed.
+
+**Dispatch gate.** While orchestrator mode is on and the gate is on, a main-session Agent dispatch must tag the cubes it runs in its budget line, `[budget: 6m step: 2 cubes: c3]`. A dispatch that tags an unapproved cube, an unknown cube, or a queued cube still waiting on dependencies is denied; an untagged dispatch is denied while the board has open work. Approved cubes pass. With orchestrator mode off nothing is gated.
+
+**`/tp-cubes on | off | status`** turns the gate on or off for new boards and shows the counts (waiting, approved, running, done). In the web API the cube sentence is sent as `actionText` because `action` names the command.
+
+**Slash commands.** The plugin also ships a skill called `orchestrate`, so the engine refuses a bare `/orchestrate` command; use `/tp-orchestrate on | off | status` (or `/task-progress:orchestrate` for the skill).
+
 ## Install (local directory marketplace)
 
 Place this folder inside a directory that you add as a local marketplace, then install the plugin from it:

@@ -157,6 +157,38 @@ const isId = (v) => typeof v === 'string' && v.length > 0 && v.length <= 200;
 const isStr = (v, max) => typeof v === 'string' && v.length <= max;
 const isText = (v, max) => isStr(v, max) && v.trim().length > 0;
 
+// Cube board fields. Strings are trimmed; arrays hold strings only.
+const isCubeId = (v) => typeof v === 'string' && v.trim().length > 0 && v.trim().length <= 40;
+function strList(v, name, minItems, maxItems, maxLen, check) {
+  if (!Array.isArray(v)) return { error: name + ' must be a list of strings' };
+  if (v.length < minItems || v.length > maxItems) return { error: `${name} needs ${minItems}-${maxItems} items` };
+  const out = [];
+  for (const s of v) {
+    if (typeof s !== 'string' || !s.trim() || s.trim().length > maxLen) {
+      return { error: `each ${name} item must be non-empty text (max ${maxLen} chars)` };
+    }
+    if (check && !check(s.trim())) return { error: `bad ${name} item` };
+    out.push(s.trim());
+  }
+  return { value: out };
+}
+function text(name, max) {
+  return (v) => (isText(v, max) ? { value: v.trim() } : { error: `${name} must be non-empty text (max ${max} chars)` });
+}
+const CUBE_CHECK = {
+  title: text('title', 300),
+  actionText: text('actionText', 2000),
+  doneWhen: text('doneWhen', 1000),
+  flow: (v) => strList(v, 'flow', 2, 6, 300),
+  after: (v) => {
+    const r = strList(v, 'after', 0, 50, 40);
+    return r.error ? r : { value: [...new Set(r.value)] };
+  },
+  files: (v) => strList(v, 'files', 0, 50, 500),
+  minutes: (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= 10 ? { value: v } : { error: 'minutes must be a number from 1 to 10' }),
+};
+const CUBE_FIELDS = Object.keys(CUBE_CHECK);
+
 // Each validator returns { args } with only whitelisted keys, or { error }.
 const ACTIONS = {
   'agent.stop': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
@@ -210,6 +242,63 @@ const ACTIONS = {
   'task.send': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
   'prompt.send': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
   'orchestrate.set': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
+
+  // ---- cube flow board ----
+  'cube.approve': (a) => (isCubeId(a.id) ? { args: { id: a.id.trim() } } : { error: 'id required (max 40 chars)' }),
+  'cube.approveAll': () => ({ args: {} }),
+  'cube.reject': (a) => {
+    if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
+    const out = { id: a.id.trim() };
+    if (a.note !== undefined && a.note !== null && a.note !== '') {
+      if (!isStr(a.note, 2000)) return { error: 'note must be text (max 2000 chars)' };
+      if (a.note.trim()) out.note = a.note.trim();
+    }
+    return { args: out };
+  },
+  'cube.update': (a) => {
+    if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
+    const unknown = Object.keys(a).filter((k) => k !== 'id' && !CUBE_FIELDS.includes(k));
+    if (unknown.length) return { error: 'unknown field(s): ' + unknown.join(', ') };
+    const out = { id: a.id.trim() };
+    for (const k of CUBE_FIELDS) {
+      if (a[k] === undefined) continue;
+      const r = CUBE_CHECK[k](a[k]);
+      if (r.error) return r;
+      out[k] = r.value;
+    }
+    if (Object.keys(out).length === 1) return { error: 'nothing to update' };
+    if (out.after && out.after.includes(out.id)) return { error: 'a cube cannot wait for itself' };
+    return { args: out };
+  },
+  'cube.requestChange': (a) => {
+    if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
+    if (!isText(a.note, 2000)) return { error: 'note required (max 2000 chars)' };
+    return { args: { id: a.id.trim(), note: a.note.trim() } };
+  },
+  'cube.add': (a) => {
+    const unknown = Object.keys(a).filter((k) => !CUBE_FIELDS.includes(k));
+    if (unknown.length) return { error: 'unknown field(s): ' + unknown.join(', ') };
+    for (const k of ['title', 'actionText', 'flow', 'doneWhen', 'minutes']) {
+      if (a[k] === undefined || a[k] === null) return { error: k + ' required' };
+    }
+    const out = {};
+    for (const k of CUBE_FIELDS) {
+      if (a[k] === undefined) continue;
+      const r = CUBE_CHECK[k](a[k]);
+      if (r.error) return r;
+      out[k] = r.value;
+    }
+    return { args: out };
+  },
+  'cube.delete': (a) => (isCubeId(a.id) ? { args: { id: a.id.trim() } } : { error: 'id required (max 40 chars)' }),
+  'cube.move': (a) => {
+    if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
+    const r = CUBE_CHECK.after(a.after);
+    if (r.error) return r;
+    if (r.value.includes(a.id.trim())) return { error: 'a cube cannot wait for itself' };
+    return { args: { id: a.id.trim(), after: r.value } };
+  },
+  'cubes.gate': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
 };
 
 // ---------- SSE ----------

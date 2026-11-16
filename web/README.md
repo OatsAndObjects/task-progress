@@ -67,6 +67,36 @@ Actions and their arguments:
 | `task.send` | `id` |
 | `prompt.send` | `text` |
 | `orchestrate.set` | `on` (boolean) |
+| `cube.approve` | `id` |
+| `cube.approveAll` | none (approves every `proposed` cube) |
+| `cube.reject` | `id`, `note?` |
+| `cube.update` | `id` and at least one of `title`, `actionText`, `flow`, `after`, `doneWhen`, `files`, `minutes`; unknown fields rejected |
+| `cube.requestChange` | `id`, `note` (required) — Claude rewrites the cube and it comes back as `revising` then `proposed` |
+| `cube.add` | `title`, `actionText`, `flow`, `doneWhen`, `minutes`, `after?`, `files?` |
+| `cube.delete` | `id` |
+| `cube.move` | `id`, `after` (the full new list of cube ids it waits for) |
+| `cubes.gate` | `on` (boolean) — when on, cubes need approval before they run |
+
+Cube field limits: ids <= 40 chars; `title` <= 300; `actionText` <= 2000 (the cube's sentence; it is `actionText` on the wire because `action` names the command, and Claude Code's cube object still calls it `action`); `doneWhen` <= 1000;
+`flow` 2-6 strings of <= 300 chars; `after` / `files` lists of strings; `minutes` a number 1..10.
+Strings are trimmed. A cube cannot wait for itself. Whether a cube is "atomic" is the mod's call:
+it answers `/api/result` with `{ok:false, message:"not atomic: split it"}` and the page shows
+that message inside the edit drawer.
+
+### `cubes` snapshot field
+
+`cubes` is `null` (no plan; the page shows an empty state) or
+
+```
+{ task, gate: boolean, cubes: Cube[], lanes: string[][] }   // lanes = cube ids by dependency depth, lane 0 = no deps
+Cube = { id, title, action, flow: string[], after: string[], doneWhen, files?: string[], minutes,
+         status: proposed|approved|queued|running|done|failed|skipped|rejected|revising,
+         note?, editedBy?: 'user'|'claude', version, agentId?, startedAt?, endedAt? }
+```
+
+The Cubes section sits above Plan: lanes are columns (stacked with "then" connectors on phones),
+dependency arrows are an SVG overlay, clicking a cube highlights its upstream and downstream
+chain, and dragging a cube onto another sends `cube.move` (adds that cube to its `after`).
 
 Any other field is dropped before the line is printed.
 

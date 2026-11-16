@@ -424,6 +424,30 @@ async function gateDecision($: any, e: any, isOwnCall: boolean, c: Ctx): Promise
   return {}
 }
 
+async function orchestrateCommand($: any, e: any) {
+  const arg = parseModeArg(e.args ?? '')
+  if (arg === null) return { text: 'Usage: /orchestrate on | off | status' }
+  if (arg === 'on' || arg === 'off') {
+    await $.state.set(modeRef, arg)
+    await quiet(dashMode($, arg === 'on'))
+    try {
+      await $.ui.invalidate('prompt.section')
+    } catch {
+      // the protocol text updates with the next new thread
+    }
+    return { text: `Orchestrator mode ${arg}.` }
+  }
+  const isOrch = await isOn($)
+  const runs = await getRuns($)
+  const { value: plan } = await $.state.get(planRef)
+  const { value: isChecked } = await $.state.get(checkedRef)
+  const parts = [`Orchestrator mode ${isOrch ? 'on' : 'off'}`]
+  if (isOrch) parts.push(`input check ${isChecked ? 'done' : 'pending'} for this prompt`)
+  parts.push(plan ? `plan: ${plan.task}, ${plan.steps.length} steps` : 'no plan')
+  parts.push(`${runs.length} executor${runs.length === 1 ? '' : 's'} running`)
+  return { text: parts.join(' · ') }
+}
+
 export const register: Register = on => {
   const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [] }
   // The session dashboard: /tp-dashboard and its pane. Its collectors ride on the hooks below.
@@ -434,10 +458,17 @@ export const register: Register = on => {
       name: 'progress',
       description: "Show the current task's progress, or clear the bar",
     })
-    await $.command.register({
-      name: 'orchestrate',
-      description: 'Orchestrator mode: /orchestrate on | off | status',
-    })
+    // The plugin's skill is also named "orchestrate", so the engine refuses a bare /orchestrate
+    // (the skill answers it as /task-progress:orchestrate). That refusal used to abort this whole
+    // hook and no tool got registered, so each command registers on its own and failures are kept
+    // from the tools. /tp-orchestrate always works.
+    for (const name of ['orchestrate', 'tp-orchestrate']) {
+      try {
+        await $.command.register({ name, description: `Orchestrator mode: /${name} on | off | status` })
+      } catch {
+        // refused (name clash): the other spelling still works
+      }
+    }
     await $.tool.register({
       name: 'TaskProgress',
       description:
@@ -502,10 +533,14 @@ export const register: Register = on => {
         required: ['id'],
       },
     })
-    await $.command.register({
-      name: 'tp-cubes',
-      description: 'Approval cubes: /tp-cubes on | off | status',
-    })
+    try {
+      await $.command.register({
+        name: 'tp-cubes',
+        description: 'Approval cubes: /tp-cubes on | off | status',
+      })
+    } catch {
+      // never let a command refusal keep the tools from registering
+    }
     await $.tool.register({
       name: 'TaskInputs',
       description:
@@ -730,29 +765,8 @@ export const register: Register = on => {
     return { text: 'Usage: /progress  ·  /progress clear' }
   })
 
-  on('command.run', { command: 'orchestrate' }, async ($, e) => {
-    const arg = parseModeArg(e.args ?? '')
-    if (arg === null) return { text: 'Usage: /orchestrate on | off | status' }
-    if (arg === 'on' || arg === 'off') {
-      await $.state.set(modeRef, arg)
-      await quiet(dashMode($, arg === 'on'))
-      try {
-        await $.ui.invalidate('prompt.section')
-      } catch {
-        // the protocol text updates with the next new thread
-      }
-      return { text: `Orchestrator mode ${arg}.` }
-    }
-    const isOrch = await isOn($)
-    const runs = await getRuns($)
-    const { value: plan } = await $.state.get(planRef)
-    const { value: isChecked } = await $.state.get(checkedRef)
-    const parts = [`Orchestrator mode ${isOrch ? 'on' : 'off'}`]
-    if (isOrch) parts.push(`input check ${isChecked ? 'done' : 'pending'} for this prompt`)
-    parts.push(plan ? `plan: ${plan.task}, ${plan.steps.length} steps` : 'no plan')
-    parts.push(`${runs.length} executor${runs.length === 1 ? '' : 's'} running`)
-    return { text: parts.join(' · ') }
-  })
+  on('command.run', { command: 'orchestrate' }, orchestrateCommand)
+  on('command.run', { command: 'tp-orchestrate' }, orchestrateCommand)
 
   // The band: one row above the prompt. Reading state while drawing subscribes this
   // instance, so every $.state.set above redraws it.

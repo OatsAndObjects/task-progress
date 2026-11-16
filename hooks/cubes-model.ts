@@ -4,6 +4,7 @@ import type { Cube, CubeBoard, CubeStatus, DashboardCommand, DashboardCommandRes
 
 export const CUBE_MAX = 40
 export const CUBE_MAX_MINUTES = 10
+export const FLOW_MIN = 2
 export const FLOW_MAX = 6
 export const ACTION_MAX = 200
 const TITLE_MAX = 80
@@ -58,7 +59,7 @@ export function checkAtomic(c: CubeSpec): string | null {
   if (!c.action) return `${name} has no action: state the single thing it does in one sentence.`
   if (c.action.length > ACTION_MAX)
     return `${name} is not atomic: its action is ${c.action.length} characters (max ${ACTION_MAX}). An action that long does more than one thing; split ${c.id} into smaller cubes.`
-  if (c.flow.length === 0) return `${name} has no flow: give 2-${FLOW_MAX} ordered micro-steps.`
+  if (c.flow.length < FLOW_MIN) return `Give cube ${c.id} at least ${FLOW_MIN} flow steps (2-${FLOW_MAX} ordered micro-steps).`
   if (c.flow.length > FLOW_MAX)
     return `${name} is not atomic: its flow has ${c.flow.length} steps (max ${FLOW_MAX}). Split ${c.id} into smaller cubes.`
   if (!c.doneWhen) return `${name} has no doneWhen: give a check that proves it is done (a test, a command, a visible result).`

@@ -1,9 +1,9 @@
 {
   "name": "task-progress",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": {
     "name": "nimis"
   },
-  "description": "Estimated progress bar for the current task in a band above the prompt, orchestrator mode, and a session dashboard (/tp-dashboard pane plus a localhost web app)",
+  "description": "Estimated progress bar for the current task in a band above the prompt, orchestrator mode, approval cubes (atomic plan cubes you approve before they run), and a session dashboard (/tp-dashboard pane plus a localhost web app)",
   "types": "./types/index.d.ts"
 }
