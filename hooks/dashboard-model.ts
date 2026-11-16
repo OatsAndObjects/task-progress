@@ -336,6 +336,16 @@ export async function runCommand(cmd: DashboardCommand, d: CommandDeps): Promise
   }
 }
 
+/**
+ * A `command` line from web/server.js: its own `id` is the command id (echoed back in
+ * the result); the target id, when the action has one, is `args.id`.
+ */
+export function commandFromLine(msg: Record<string, unknown>): { commandId: string; cmd: DashboardCommand } {
+  const { type: _t, id: commandId, args, ...top } = msg as any
+  const cmd: DashboardCommand = { ...top, ...(args && typeof args === 'object' ? args : {}), action: String(msg.action ?? '') }
+  return { commandId: String(commandId ?? ''), cmd }
+}
+
 /** Splits a stream of text pieces into whole lines; keeps the unfinished tail. */
 export function splitLines(buffer: string, piece: string): { lines: string[]; rest: string } {
   const all = (buffer + piece).split(/\r?\n/)

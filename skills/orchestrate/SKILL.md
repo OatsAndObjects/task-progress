@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Orchestrator protocol for the main session: check inputs, plan with time budgets, dispatch Sonnet executors in parallel, review reports. Use at the start of any multi-step task while orchestrator mode is on.
+description: "Orchestrator protocol for the main session: check inputs, plan with time budgets, dispatch Sonnet executors in parallel, review reports. Use at the start of any multi-step task while orchestrator mode is on."
 ---
 
 # Orchestrator protocol

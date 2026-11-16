@@ -398,7 +398,7 @@ async function gateDecision($: any, e: any, isOwnCall: boolean, c: Ctx): Promise
 
 export const register: Register = on => {
   const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [] }
-  // The session dashboard: /dashboard and its pane. Its collectors ride on the hooks below.
+  // The session dashboard: /tp-dashboard and its pane. Its collectors ride on the hooks below.
   registerDashboard(on)
 
   on('session.start', async ($, e, next) => {

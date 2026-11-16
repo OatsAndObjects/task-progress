@@ -17,6 +17,7 @@ import {
   markOverruns,
   parseBudget,
   parseTaskNotification,
+  commandFromLine,
   randomToken,
   runCommand,
   setAgentStatus,
@@ -289,10 +290,9 @@ function startWeb($: any): Promise<Web | null> {
               settle(web)
             } else if (msg?.type === 'command' && web) {
               // The command's own id goes back with the result; the target id is args.id.
-              const { type: _t, id: commandId, args, ...top } = msg
-              const cmd: DashboardCommand = { ...top, ...(args && typeof args === 'object' ? args : {}), action: String(msg.action ?? '') }
+              const { commandId, cmd } = commandFromLine(msg)
               const w = web
-              void command($, cmd).then(r => postResult($, w, String(commandId ?? ''), r))
+              void command($, cmd).then(r => postResult($, w, commandId, r))
             }
           }
         }

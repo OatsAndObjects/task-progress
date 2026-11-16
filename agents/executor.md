@@ -1,6 +1,6 @@
 ---
 name: executor
-description: Executes ONE planned step handed over by the orchestrator, within the time budget in its prompt, and reports back in a fixed format. Use only for orchestrated steps whose prompt starts with a [budget: <N>m step: <k>] line.
+description: "Executes ONE planned step handed over by the orchestrator, within the time budget in its prompt, and reports back in a fixed format. Use only for orchestrated steps whose prompt starts with a [budget: <N>m step: <k>] line."
 model: sonnet
 ---
 
