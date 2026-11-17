@@ -744,7 +744,7 @@ export const register: Register = on => {
       const gate = (await dashCubesGate($)) ? 'on' : 'off'
       if (!b) return { text: `Approval cubes ${gate} · no cube board` }
       const n = (st: string) => b.cubes.filter(x => x.status === st).length
-      return { text: `Approval cubes ${gate} · ${b.cubes.length} cubes: ${n('proposed')} waiting, ${n('approved') + n('queued')} approved, ${n('running')} running, ${n('done')} done` }
+      return { text: `Approval cubes ${gate} · ${b.cubes.length} cubes: ${n('proposed')} waiting, ${n('approved') + n('queued')} approved, ${n('running')} running, ${n('reviewing')} in review, ${n('done')} done` }
     }
     return { text: 'Usage: /tp-cubes on | off | status' }
   })

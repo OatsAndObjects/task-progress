@@ -117,7 +117,7 @@ export type CubeReview = {
   quiz?: ReviewQuiz[]
   at: number
 }
-export type CubeStatus = 'proposed' | 'approved' | 'queued' | 'running' | 'done' | 'failed' | 'skipped' | 'rejected' | 'revising'
+export type CubeStatus = 'proposed' | 'approved' | 'queued' | 'running' | 'reviewing' | 'done' | 'failed' | 'skipped' | 'rejected' | 'revising'
 /** One atomic unit of a task the user approves before it runs. */
 export type Cube = {
   /** `c1`, `c2`, ... (lower case). */

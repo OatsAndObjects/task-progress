@@ -215,6 +215,7 @@ h1::before { content: "\2726"; color: var(--star); margin-right: 8px; display: i
 .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--gray-soft); color: var(--muted); white-space: nowrap; text-transform: lowercase; }
 .chip.running, .chip.doing { background: var(--accent-soft); color: var(--accent-ink); }
 .chip.done { background: var(--green-soft); color: var(--green); }
+.chip.reviewing { background: var(--amber-soft); color: var(--amber); }
 .chip.failed, .chip.over, .chip.blocked { background: var(--red-soft); color: var(--red); }
 .chip.stopped, .chip.skipped, .chip.idle { background: var(--gray-soft); color: var(--muted); }
 .chip.high { background: var(--red-soft); color: var(--red); }
@@ -393,6 +394,7 @@ textarea { resize: vertical; }
 .cube[data-status="done"] { --c-edge: #A5B4FC; --c-top: #5B66B0; --c-side: #3B4590; --c-face: rgba(165, 180, 252, .1); --c-ink: var(--star); }
 .cube[data-status="failed"], .cube[data-status="rejected"] { --c-edge: #F87171; --c-top: #A94A52; --c-side: #8A2E3A; --c-face: var(--red-soft); --c-ink: var(--red); }
 .cube[data-status="revising"] { --c-edge: #F59E0B; --c-top: #A8721C; --c-side: #86580F; --c-face: var(--amber-soft); --c-ink: var(--amber); }
+.cube[data-status="reviewing"] { --c-edge: #F59E0B; --c-top: #A8721C; --c-side: #86580F; --c-face: var(--amber-soft); --c-ink: var(--amber); }
 .cube[data-status="skipped"] { opacity: .5; }
 @keyframes cubePulse { 50% { box-shadow: 0 0 40px rgba(125, 211, 252, .6); } }
 .cube.sel { box-shadow: 0 0 0 3px var(--accent-soft), 0 0 30px rgba(10, 132, 255, .5); }
@@ -410,6 +412,12 @@ textarea { resize: vertical; }
 .cube-flow li:not(:last-child)::after { content: ""; position: absolute; left: 7px; top: 15px; bottom: 0; width: 1px; background: var(--border-strong); }
 .cube-flow .more { padding-left: 20px; font-size: 11.5px; color: var(--muted); }
 .cube-flow .more::before, .cube-flow .more::after { display: none; }
+.cube-flow .does { color: var(--muted); }
+.cube-flow .calls { color: var(--faint); font-size: 11.5px; }
+.cube-review { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.cube-review.passed { color: var(--green); }
+.cube-review.changes { color: var(--red); }
+.cube-review.running, .cube-review.investigate { color: var(--amber); }
 .cube-done { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .cube-done b { color: var(--text); font-weight: 600; }
 .cube-note { font-size: 11.5px; background: var(--amber-soft); color: var(--text); border-radius: 6px; padding: 4px 7px; overflow-wrap: anywhere; }
@@ -436,7 +444,9 @@ textarea { resize: vertical; }
 .fld > label, .fld > .lbl { font-size: 12px; font-weight: 600; color: var(--muted); }
 .fld input[type="text"], .fld textarea { width: 100%; }
 .flow-rows { display: flex; flex-direction: column; gap: 6px; }
-.flow-row { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; gap: 6px; align-items: center; }
+.flow-row { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; gap: 6px; align-items: start; }
+.flow-row .flow-in { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.flow-row .flow-in .pair { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 4px; }
 .flow-row .n { font-size: 11.5px; font-weight: 700; color: var(--muted); text-align: right; font-family: var(--mono); }
 .flow-row .ctl { display: flex; gap: 2px; }
 .after-list { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
@@ -1422,6 +1432,7 @@ textarea { resize: vertical; }
       h('span', { class: 'chip proposed', text: cnt(['proposed', 'revising']) + ' waiting' }),
       h('span', { class: 'chip approved', text: cnt(['approved', 'queued']) + ' approved' }),
       h('span', { class: 'chip running', text: cnt(['running']) + ' running' }),
+      h('span', { class: 'chip reviewing', text: cnt(['reviewing']) + ' in review' }),
       h('span', { class: 'chip done', text: cnt(['done']) + ' done' }));
     var gate = $('gateToggle');
     gate.setAttribute('aria-checked', b.gate ? 'true' : 'false');
@@ -1523,7 +1534,7 @@ textarea { resize: vertical; }
       : h('span', { text: (c.minutes ? fmtMin(c.minutes) : '?') + ' min' });
     card.appendChild(h('div', { class: 'cube-top' },
       h('span', { class: 'cube-id', text: c.id }),
-      h('span', { class: 'chip ' + st, text: st }),
+      h('span', { class: 'chip ' + st, text: st === 'reviewing' ? 'in review' : st }),
       chatUnread(c) > 0 ? h('span', { class: 'chat-badge', title: 'Claude answered your question \u2014 open Ask', text: '\u2726 ' + chatUnread(c) }) : null,
       h('span', { class: 'cube-min' }, mins)));
     card.appendChild(h('div', { class: 'cube-title', title: c.action || '' },
@@ -1533,7 +1544,21 @@ textarea { resize: vertical; }
     if (flow.length) {
       var ol = h('ol', { class: 'cube-flow' });
       var show = cubeExpand[c.id] ? flow : flow.slice(0, 3);
-      show.forEach(function (f) { ol.appendChild(h('li', { text: String(f) })); });
+      show.forEach(function (f) {
+        if (f && typeof f === 'object') {
+          var base = String(f.file || '').split(/[\\/]/).pop();
+          var fnTxt = String(f.fn || ''), li = h('li', null);
+          var isSh = ['shell', 'browser', 'terminal'].indexOf(String(f.file)) >= 0;
+          if (!base && !fnTxt) li.appendChild(document.createTextNode(String(f.does || '')));
+          else if (isSh) { li.appendChild(document.createTextNode('$ ' + fnTxt)); if (f.does) li.appendChild(h('span', { class: 'does', text: '  ' + f.does })); }
+          else {
+            li.appendChild(document.createTextNode((base ? base + ' \u203a ' : '') + fnTxt + (fnTxt && !/[()]/.test(fnTxt) ? '()' : '')));
+            if (f.does) li.appendChild(h('span', { class: 'does', text: '  ' + f.does }));
+            if (f.calls) li.appendChild(h('div', { class: 'calls', text: '\u2192 ' + f.calls }));
+          }
+          ol.appendChild(li);
+        } else ol.appendChild(h('li', { text: String(f) }));
+      });
       if (flow.length > 3) {
         ol.appendChild(h('li', { class: 'more' }, h('button', { class: 'btn ghost', type: 'button', style: 'padding: 0 4px; font-size: 11.5px',
           text: cubeExpand[c.id] ? 'show less' : '+' + (flow.length - 3) + ' more',
@@ -1548,6 +1573,15 @@ textarea { resize: vertical; }
         text: files.slice(0, 2).map(function (f) { return String(f).split(/[\\/]/).pop(); }).join(', ') + (files.length > 2 ? ' +' + (files.length - 2) : '') }));
     }
     if (c.note) card.appendChild(h('div', { class: 'cube-note', text: String(c.note) }));
+    var rv = c.review;
+    if (rv && typeof rv === 'object') {
+      var sevN = function (n) { return arr(rv.findings).filter(function (x) { return x && x.severity === n; }).length; };
+      var blk = ['P0', 'P1'].filter(function (n) { return sevN(n); }).map(function (n) { return n + '\u00d7' + sevN(n); }).join(' ');
+      var rtxt = rv.status === 'passed' ? '\u2713 APPROVE'
+        : rv.status === 'changes' ? '\u2717 REQUEST CHANGES' + (blk ? ' \u00b7 ' + blk : '')
+        : rv.status === 'running' ? '\u25d0 running' : '? NEEDS INVESTIGATION';
+      card.appendChild(h('div', { class: 'cube-review ' + String(rv.status || ''), title: String(rv.summary || ''), text: 'Review: ' + rtxt }));
+    }
 
     var waits = arr(c.after).filter(function (d) { return !m[d] || !CUBE_FINISHED[m[d].status]; });
     if (waits.length && (st === 'proposed' || st === 'approved' || st === 'queued' || st === 'revising')) {
@@ -1606,7 +1640,18 @@ textarea { resize: vertical; }
     acts.addEventListener('click', function (e) { e.stopPropagation(); });
     var askBtn = h('button', { class: 'btn', type: 'button', text: 'Ask', title: 'Questions only \u2014 the cube stays as it is', 'aria-label': 'Chat about step ' + c.id,
       onclick: function (e) { openDrawer('chat', c, e.currentTarget); } });
-    if (!CUBE_EDITABLE[st]) { acts.appendChild(askBtn); return acts; }
+    var canReview = st === 'done' || st === 'reviewing' || st === 'failed';
+    var revRunning = !!(c.review && c.review.status === 'running');
+    var revBtn = canReview ? h('button', { class: 'btn', type: 'button', disabled: busy || revRunning, text: revRunning ? 'Reviewing\u2026' : 'Run review', title: 'Ask Claude to review this cube with pr-reviewer',
+      onclick: function (e) { command('cube.review', { id: c.id }, key, e.currentTarget); } }) : null;
+    var doneBtn = st === 'reviewing' ? h('button', { class: 'btn', type: 'button', disabled: busy, text: 'Mark done', title: 'Skip the review and mark this cube done',
+      onclick: function (e) { command('cube.markDone', { id: c.id }, key, e.currentTarget); } }) : null;
+    if (!CUBE_EDITABLE[st]) {
+      if (revBtn) acts.appendChild(revBtn);
+      if (doneBtn) acts.appendChild(doneBtn);
+      acts.appendChild(askBtn);
+      return acts;
+    }
     var cf = confirming[cfKey];
     if (cf) {
       acts.appendChild(h('span', { class: 'confirm' }, cf === 'reject' ? 'Reject ' + c.id + '?' : 'Delete ' + c.id + '?',
@@ -1624,6 +1669,7 @@ textarea { resize: vertical; }
     acts.appendChild(h('button', { class: 'btn', type: 'button', disabled: busy, text: '✎', title: 'Edit cube', 'aria-label': 'Edit ' + c.id,
       onclick: function (e) { openDrawer('edit', c, e.currentTarget); } }));
     acts.appendChild(askBtn);
+    if (revBtn) acts.appendChild(revBtn);
     if (st !== 'revising') {
       acts.appendChild(h('button', { class: 'btn', type: 'button', disabled: busy, text: '💬', title: 'Ask Claude to change it', 'aria-label': 'Ask Claude to change ' + c.id,
         onclick: function (e) { openDrawer('ask', c, e.currentTarget); } }));
@@ -1673,15 +1719,26 @@ textarea { resize: vertical; }
     chatSeen[d.id] = claudeCount(c); chatSave();
   }
 
+  // A flow item as an editable object; a legacy string becomes a step with only `does`.
+  function flowObj(f) {
+    if (f && typeof f === 'object') return { file: String(f.file || ''), fn: String(f.fn || ''), does: String(f.does || ''), calls: String(f.calls || '') };
+    return { file: '', fn: '', does: String(f || ''), calls: '' };
+  }
+  function flowOut(f) {
+    var o = { file: f.file.trim(), fn: f.fn.trim(), does: f.does.trim() };
+    if (f.calls.trim()) o.calls = f.calls.trim();
+    return o;
+  }
+
   function openDrawer(mode, c, from) {
     drawerReturn = from || document.activeElement;
     drawer = {
       mode: mode, id: c ? c.id : null, base: c || null,
-      model: c ? { title: c.title || '', action: c.action || '', flow: arr(c.flow).map(String), after: arr(c.after).slice(),
+      model: c ? { title: c.title || '', action: c.action || '', flow: arr(c.flow).map(flowObj), after: arr(c.after).slice(),
         doneWhen: c.doneWhen || '', files: arr(c.files).join(', '), minutes: clampMin(c.minutes || 5), note: '' }
-        : { title: '', action: '', flow: ['', ''], after: [], doneWhen: '', files: '', minutes: 5, note: '' }
+        : { title: '', action: '', flow: [flowObj(''), flowObj('')], after: [], doneWhen: '', files: '', minutes: 5, note: '' }
     };
-    if (!drawer.model.flow.length) drawer.model.flow = [''];
+    if (!drawer.model.flow.length) drawer.model.flow = [flowObj('')];
     setText('drawerTitle', mode === 'add' ? 'Add cube' : mode === 'ask' ? 'Ask Claude to change ' + c.id : mode === 'chat' ? 'Chat about ' + c.id : 'Edit ' + c.id);
     $('drawerSave').textContent = mode === 'ask' ? 'Send to Claude' : mode === 'chat' ? 'Send' : mode === 'add' ? 'Add cube' : 'Save';
     $('drawerCancel').style.display = mode === 'chat' ? 'none' : '';
@@ -1744,18 +1801,24 @@ textarea { resize: vertical; }
 
     var rows = h('div', { class: 'flow-rows' });
     md.flow.forEach(function (step, i) {
-      var inp = h('input', { type: 'text', maxlength: '300', value: step, 'aria-label': 'Flow step ' + (i + 1) });
-      inp.addEventListener('input', function () { md.flow[i] = inp.value; });
+      function fld(key, max, ph) {
+        var el = h('input', { type: 'text', maxlength: String(max), value: step[key], placeholder: ph, 'aria-label': 'Flow step ' + (i + 1) + ' ' + key });
+        el.addEventListener('input', function () { md.flow[i][key] = el.value; });
+        return el;
+      }
       function mv(delta) {
         var j = i + delta;
         if (j < 0 || j >= md.flow.length) return;
         var t = md.flow[i]; md.flow[i] = md.flow[j]; md.flow[j] = t;
         buildDrawer();
-        var again = $('drawerBody').querySelectorAll('.flow-row input')[j];
+        var again = $('drawerBody').querySelectorAll('.flow-row .flow-in input:first-child')[j];
         if (again) again.focus();
       }
       rows.appendChild(h('div', { class: 'flow-row' },
-        h('span', { class: 'n', text: (i + 1) + '.' }), inp,
+        h('span', { class: 'n', text: (i + 1) + '.' }),
+        h('div', { class: 'flow-in' },
+          h('div', { class: 'pair' }, fld('file', 200, 'file, e.g. hooks/a.ts'), fld('fn', 120, 'function')),
+          fld('does', 200, 'what it does'), fld('calls', 240, 'calls (optional)')),
         h('span', { class: 'ctl' },
           h('button', { class: 'btn icon ghost', type: 'button', text: '↑', 'aria-label': 'Move step up', disabled: i === 0, onclick: function () { mv(-1); } }),
           h('button', { class: 'btn icon ghost', type: 'button', text: '↓', 'aria-label': 'Move step down', disabled: i === md.flow.length - 1, onclick: function () { mv(1); } }),
@@ -1764,8 +1827,8 @@ textarea { resize: vertical; }
     });
     kids.push(h('div', { class: 'fld' }, h('span', { class: 'lbl', text: 'Flow (2-6 small steps, in order)' }), rows,
       h('div', null, h('button', { class: 'btn', type: 'button', text: '+ Add step', disabled: md.flow.length >= 6, onclick: function () {
-        md.flow.push(''); buildDrawer();
-        var all = $('drawerBody').querySelectorAll('.flow-row input');
+        md.flow.push(flowObj('')); buildDrawer();
+        var all = $('drawerBody').querySelectorAll('.flow-row .flow-in input:first-child');
         if (all.length) all[all.length - 1].focus();
       } }))));
 
@@ -1830,7 +1893,7 @@ textarea { resize: vertical; }
     }
     var full = {
       title: md.title.trim(), actionText: md.action.trim(),
-      flow: md.flow.map(function (x) { return x.trim(); }).filter(Boolean),
+      flow: md.flow.filter(function (f) { return f.file.trim() || f.fn.trim() || f.does.trim() || f.calls.trim(); }).map(flowOut),
       after: md.after.slice(), doneWhen: md.doneWhen.trim(),
       files: md.files.split(',').map(function (x) { return x.trim(); }).filter(Boolean),
       minutes: clampMin(md.minutes)
@@ -1839,6 +1902,10 @@ textarea { resize: vertical; }
     if (!full.actionText) return drawerErr('Say what the cube does.');
     if (full.flow.length < 2) return drawerErr('Give at least 2 flow steps.');
     if (full.flow.length > 6) return drawerErr('At most 6 flow steps — split the cube instead.');
+    var flowSame = d.mode === 'edit' && JSON.stringify(full.flow) === JSON.stringify(arr(d.base.flow).map(function (x) { return flowOut(flowObj(x)); }));
+    for (var fi = 0; !flowSame && fi < full.flow.length; fi++) {
+      if (!full.flow[fi].file || !full.flow[fi].fn || !full.flow[fi].does) return drawerErr('Flow step ' + (fi + 1) + ' needs a file, a function and what it does.');
+    }
     if (!full.doneWhen) return drawerErr('Say how we know it is done.');
     if (d.mode === 'add') {
       var args = Object.assign({}, full);
@@ -1848,7 +1915,7 @@ textarea { resize: vertical; }
       return;
     }
     var base = d.base, was = {
-      title: base.title || '', actionText: base.action || '', flow: arr(base.flow).map(String), after: arr(base.after),
+      title: base.title || '', actionText: base.action || '', flow: arr(base.flow).map(function (x) { return flowOut(flowObj(x)); }), after: arr(base.after),
       doneWhen: base.doneWhen || '', files: arr(base.files).map(String), minutes: base.minutes
     };
     var upd = { id: d.id }, changed = 0;

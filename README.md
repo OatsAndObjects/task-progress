@@ -88,3 +88,7 @@ Place this folder inside a directory that you add as a local marketplace, then i
     /plugin install task-progress@<marketplace-name>
 
 Plugin manifest: `.claude-plugin/plugin.json`. Hook module: `hooks/register.tsx`.
+
+## Review gates done (0.10.1)
+
+With the gate on, a cube whose executor finishes goes to `reviewing` (pane glyph `◐`, "in review"), not `done`; dependents keep waiting because only `done` satisfies `after`, and Claude is told `Cube <id> is in review: dispatch a review executor (Skill "pr-reviewer" on its files), then CubeReview.` `CubeReview` APPROVE makes it `done` and releases dependents; REQUEST_CHANGES reopens it to `approved` for a fix; NEEDS_INVESTIGATION leaves it in review. Escape hatch: `cube.markDone {id}` (web button "Mark done") forces a cube in review, failed or approved to done. With the gate off a finished cube is done as before. Editing a legacy cube without a new flow no longer fails. The web dashboard now shows object flow steps, edits them as file/fn/does/calls inputs, shows the review line and a Run review button, and accepts `cube.review`.

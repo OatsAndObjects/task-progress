@@ -175,11 +175,31 @@ function strList(v, name, minItems, maxItems, maxLen, check) {
 function text(name, max) {
   return (v) => (isText(v, max) ? { value: v.trim() } : { error: `${name} must be non-empty text (max ${max} chars)` });
 }
+// Flow: 2-6 steps {file, fn, does, calls?}; every text is non-empty and capped.
+function flowSteps(v) {
+  if (!Array.isArray(v) || v.length < 2 || v.length > 6) return { error: 'flow must be 2-6 steps' };
+  const out = [];
+  for (let i = 0; i < v.length; i++) {
+    const f = v[i];
+    if (!f || typeof f !== 'object' || Array.isArray(f)) return { error: `flow[${i}] must be an object {file, fn, does}` };
+    const step = {};
+    for (const [k, max] of [['file', 200], ['fn', 120], ['does', 200]]) {
+      if (!isText(f[k], max)) return { error: `flow[${i}].${k} must be non-empty text (max ${max} chars)` };
+      step[k] = f[k].trim();
+    }
+    if (f.calls !== undefined && f.calls !== null && f.calls !== '') {
+      if (!isStr(f.calls, 240)) return { error: `flow[${i}].calls must be text (max 240 chars)` };
+      if (f.calls.trim()) step.calls = f.calls.trim();
+    }
+    out.push(step);
+  }
+  return { value: out };
+}
 const CUBE_CHECK = {
   title: text('title', 300),
   actionText: text('actionText', 2000),
   doneWhen: text('doneWhen', 1000),
-  flow: (v) => strList(v, 'flow', 2, 6, 300),
+  flow: flowSteps,
   after: (v) => {
     const r = strList(v, 'after', 0, 50, 40);
     return r.error ? r : { value: [...new Set(r.value)] };
@@ -279,6 +299,14 @@ const ACTIONS = {
     if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
     if (!isText(a.text, 2000)) return { error: 'text required (max 2000 chars)' };
     return { args: { id: a.id.trim(), text: a.text.trim() } };
+  },
+  'cube.review': (a) => {
+    if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
+    return { args: { id: a.id.trim() } };
+  },
+  'cube.markDone': (a) => {
+    if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
+    return { args: { id: a.id.trim() } };
   },
   'cube.add': (a) => {
     const unknown = Object.keys(a).filter((k) => !CUBE_FIELDS.includes(k));

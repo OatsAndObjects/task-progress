@@ -9,8 +9,8 @@ export const FLOW_MAX = 6
 export const ACTION_MAX = 200
 const TITLE_MAX = 80
 const NOTE_MAX = 2000
-const CUBE_STATUSES: readonly CubeStatus[] = ['proposed', 'approved', 'queued', 'running', 'done', 'failed', 'skipped', 'rejected', 'revising']
-/** A dependency in one of these states lets its dependents run. */
+const CUBE_STATUSES: readonly CubeStatus[] = ['proposed', 'approved', 'queued', 'running', 'reviewing', 'done', 'failed', 'skipped', 'rejected', 'revising']
+/** A dependency in one of these states lets its dependents run ('reviewing' does not: the PR review gates 'done'). */
 const SATISFIED: readonly CubeStatus[] = ['done', 'skipped']
 /** Cubes the user may approve. */
 const APPROVABLE: readonly CubeStatus[] = ['proposed', 'failed', 'rejected', 'revising']
@@ -85,7 +85,7 @@ export function normalizeCube(raw: any, fallbackId = ''): CubeSpec {
 }
 
 /** Why a cube is not atomic, or null when it is. */
-export function checkAtomic(c: CubeSpec): string | null {
+export function checkAtomic(c: CubeSpec, checkFlowItems = true): string | null {
   const name = c.id ? `Cube ${c.id}` : 'A cube'
   if (!c.id) return 'A cube has no id: give every cube an id like "c1".'
   if (!/^[a-z0-9_-]{1,20}$/.test(c.id)) return `${name}: id must be 1-20 letters, digits, "-" or "_".`
@@ -95,7 +95,7 @@ export function checkAtomic(c: CubeSpec): string | null {
   if (c.flow.length < FLOW_MIN) return `Give cube ${c.id} at least ${FLOW_MIN} flow steps (2-${FLOW_MAX} ordered micro-steps).`
   if (c.flow.length > FLOW_MAX)
     return `${name} is not atomic: its flow has ${c.flow.length} steps (max ${FLOW_MAX}). Split ${c.id} into smaller cubes.`
-  for (let i = 0; i < c.flow.length; i++) {
+  for (let i = 0; checkFlowItems && i < c.flow.length; i++) {
     const f = c.flow[i]!
     if (!f.file || !f.fn || !f.does)
       return `${name}: flow[${i}] needs file, fn and does — e.g. ${FLOW_EXAMPLE}. Non-code steps use file "shell" and the command as fn.`
@@ -256,9 +256,10 @@ function patched(c: Cube, patch: any): CubeSpec {
 export function editCube(board: CubeBoard, id: string, patch: any, by: 'user' | 'claude'): { board: CubeBoard } | { error: string } {
   const c = board.cubes.find(x => x.id === id)
   if (!c) return { error: `no cube ${id}` }
-  if (c.status === 'running' || c.status === 'done') return { error: `Cube ${id} is ${c.status}; it can no longer be changed.` }
+  if (c.status === 'running' || c.status === 'reviewing' || c.status === 'done') return { error: `Cube ${id} is ${c.status}; it can no longer be changed.` }
   const s = patched(c, patch)
-  const err = checkAtomic(s) ?? checkGraph(board.cubes.map(x => (x.id === id ? s : x)))
+  // A legacy cube (string flow items, empty file/fn) stays editable while the edit leaves its flow alone.
+  const err = checkAtomic(s, patch?.flow !== undefined) ?? checkGraph(board.cubes.map(x => (x.id === id ? s : x)))
   if (err) return { error: err }
   const isReset = by === 'claude' || c.status === 'approved' || c.status === 'queued'
   const next: Cube = {
@@ -282,7 +283,7 @@ export function reviseCube(board: CubeBoard, input: any): { board: CubeBoard; me
   const id = str(input?.id).toLowerCase()
   const c = board.cubes.find(x => x.id === id)
   if (!c) return { error: `no cube ${id || '(id missing)'}` }
-  if (c.status === 'running' || c.status === 'done') return { error: `Cube ${id} is ${c.status}; it can no longer be changed.` }
+  if (c.status === 'running' || c.status === 'reviewing' || c.status === 'done') return { error: `Cube ${id} is ${c.status}; it can no longer be changed.` }
   const split: any[] = Array.isArray(input?.splitInto) ? input.splitInto : []
   if (split.length === 0) {
     const r = editCube(board, id, input, 'claude')
@@ -408,15 +409,17 @@ export function reviewCubeResult(board: CubeBoard, input: any, at: number): { bo
     at,
   }
   // Changes requested: the cube is not done; it goes back to approved so a fix executor can be dispatched.
-  const reopen = status === 'changes' && (c.status === 'done' || c.status === 'failed')
-  const next = setCube(board, id, { review, ...(reopen ? { status: 'approved' as const } : {}) })
+  const reopen = status === 'changes' && (c.status === 'done' || c.status === 'failed' || c.status === 'reviewing')
+  // APPROVE is what turns a cube that finished its work ('reviewing') into 'done', which releases its dependents.
+  const finish = status === 'passed' && c.status === 'reviewing'
+  const next = setCube(board, id, { review, ...(reopen ? { status: 'approved' as const } : finish ? { status: 'done' as const } : {}) })
   const blocking = (review.findings ?? []).filter(f => f.severity === 'P0' || f.severity === 'P1').length
   const message =
     status === 'passed'
-      ? `review stored for ${id}: APPROVE; the cube may be marked done`
+      ? `review stored for ${id}: APPROVE; ${finish ? 'the cube is done and its dependents are released' : 'the cube is unchanged'}`
       : status === 'changes'
         ? `review stored for ${id}: REQUEST_CHANGES (${blocking} P0/P1 finding${blocking === 1 ? '' : 's'}). The cube is not done: dispatch a task-progress:executor (tag "cubes: ${id}") to fix the P0/P1 findings, then run the review again and call CubeReview.`
-        : `review stored for ${id}: NEEDS_INVESTIGATION; look into the open questions before calling the cube done`
+        : `review stored for ${id}: NEEDS_INVESTIGATION; look into the open questions; the cube stays in review until a review approves it`
   return { board: next, message }
 }
 
@@ -495,6 +498,7 @@ export function gateCheck(board: CubeBoard | null | undefined, tagged: string[] 
     if (c.status === 'queued') return `Cube ${id} is approved but waits for ${c.after.filter(a => !SATISFIED.includes(board.cubes.find(x => x.id === a)?.status as CubeStatus)).join(', ')} to finish — wait for it.`
     if (c.status === 'running') return `Cube ${id} is already running.`
     if (c.status === 'done') return `Cube ${id} is already done.`
+    if (c.status === 'reviewing') return `Cube ${id} is in review: dispatch a review executor (Skill "pr-reviewer"), then CubeReview. Only a REQUEST_CHANGES review reopens it for a fix.`
     if (c.status === 'revising') return `Cube ${id} is waiting for your CubeRevise and then the user's approval — wait for it.`
     return `Cube ${id} is waiting for the user's approval — wait for it.`
   }
@@ -509,13 +513,16 @@ export function markRunning(board: CubeBoard, ids: string[], agentId: string, no
   }
 }
 
-/** The running cubes of a finished agent turn done (or failed). */
+/**
+ * The running cubes of a finished agent turn: failed when it did not end well; with the gate on they
+ * go to 'reviewing' (the PR review makes them done); with the gate off they are done as before.
+ */
 export function finishAgent(board: CubeBoard, agentId: string, isOk: boolean, now: number): CubeBoard {
   if (!board.cubes.some(c => c.agentId === agentId && c.status === 'running')) return board
   return {
     ...board,
     cubes: board.cubes.map(c =>
-      c.agentId === agentId && c.status === 'running' ? { ...c, status: isOk ? ('done' as const) : ('failed' as const), endedAt: now } : c,
+      c.agentId === agentId && c.status === 'running' ? { ...c, status: isOk ? (board.gate ? ('reviewing' as const) : ('done' as const)) : ('failed' as const), endedAt: now } : c,
     ),
   }
 }
@@ -526,6 +533,7 @@ const STEP_OF: Record<CubeStatus, SnapshotPlanStep['status']> = {
   queued: 'pending',
   revising: 'pending',
   running: 'running',
+  reviewing: 'running',
   done: 'done',
   failed: 'over',
   skipped: 'skipped',
@@ -589,11 +597,30 @@ export function cubeFields(cmd: DashboardCommand): Record<string, unknown> {
   return out
 }
 
-/** An agent's turn ended: its running cubes turn done (or failed), and ready queued cubes are released. */
+/** An agent's turn ended: its running cubes go to review (done when the gate is off, failed on error), and ready queued cubes are released. */
 export async function finishAndRelease(d: CubeDeps, agentId: string, isOk: boolean): Promise<Cube[]> {
   const board = d.get().cubes
   if (!board || !board.cubes.some(c => c.agentId === agentId && c.status === 'running')) return []
-  return commit(d, finishAgent(board, agentId, isOk, d.now()))
+  const next = finishAgent(board, agentId, isOk, d.now())
+  const ready = await commit(d, next)
+  const inReview = next.cubes.filter(c => c.agentId === agentId && c.status === 'reviewing')
+  if (inReview.length > 0) await d.submit(inReview.map(reviewNotice).join('\n'), { keepInputCheck: true })
+  return ready
+}
+
+/** The instruction that tells Claude a finished cube waits for its PR review. */
+export function reviewNotice(c: Pick<Cube, 'id'>): string {
+  return `Cube ${c.id} is in review: dispatch a review executor (Skill "pr-reviewer" on its files), then CubeReview.`
+}
+
+/** CubeReview from the model: stores the result; an APPROVE makes the cube done and releases its dependents. */
+export async function applyReview(d: CubeDeps, input: any): Promise<{ ok: boolean; message: string }> {
+  const board = d.get().cubes
+  if (!board) return { ok: false, message: 'no cube board' }
+  const r = reviewCubeResult(board, input, d.now())
+  if ('error' in r) return { ok: false, message: r.error }
+  await commit(d, r.board)
+  return { ok: true, message: r.message }
 }
 
 /** Approves one cube in `board` (no side effects): approved when its deps are done, else queued. */
@@ -648,6 +675,14 @@ export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promis
       const sent = await commit(d, b, ready)
       return ok(`${sent.length} cube${sent.length === 1 ? '' : 's'} sent to Claude, ${queued} queued`)
     }
+    case 'cube.markDone': {
+      // Escape hatch: force a cube done without a review (nothing deadlocks if the review cannot run).
+      const c = board.cubes.find(x => x.id === id)
+      if (!c) return fail(`no cube ${id}`)
+      if (c.status !== 'reviewing' && c.status !== 'failed' && c.status !== 'approved') return fail(`cube ${id} is ${c.status}: only a cube in review, failed or approved can be marked done`)
+      await commit(d, setCube(board, id, { status: 'done', endedAt: c.endedAt ?? d.now() }))
+      return ok(`cube ${id} marked done without review`)
+    }
     case 'cube.reject': {
       const c = board.cubes.find(x => x.id === id)
       if (!c) return fail(`no cube ${id}`)
@@ -690,7 +725,7 @@ export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promis
       const c = board.cubes.find(x => x.id === id)
       if (!c) return fail(`no cube ${id}`)
       if (c.status === 'running') return fail(`cube ${id} is still running: review it once its executor reports`)
-      if (c.status !== 'done' && c.status !== 'approved' && c.status !== 'failed') return fail(`cube ${id} is ${c.status}: nothing to review yet`)
+      if (c.status !== 'done' && c.status !== 'reviewing' && c.status !== 'approved' && c.status !== 'failed') return fail(`cube ${id} is ${c.status}: nothing to review yet`)
       const next = setCube(board, id, { review: { status: 'running', at: d.now() } })
       d.put(withBoard(d.get(), next))
       await d.submit(reviewPrompt(c), { keepInputCheck: true })

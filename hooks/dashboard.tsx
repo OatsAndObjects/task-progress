@@ -30,7 +30,7 @@ import {
   touchFile,
   type CommandDeps,
 } from './dashboard-model'
-import { answerCube, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviewCubeResult, reviseCube, withBoard } from './cubes-model'
+import { answerCube, applyReview, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviseCube, withBoard } from './cubes-model'
 import type { CubeBoard } from '../types/index'
 
 export const PANE_ID = 'tp-dashboard'
@@ -587,8 +587,8 @@ export function registerDashboard(on: any): void {
                           const sev = (n: string) => (rv?.findings ?? []).filter(x => x.severity === n).length
                           const blockers = [sev('P0') ? `P0×${sev('P0')}` : '', sev('P1') ? `P1×${sev('P1')}` : ''].filter(Boolean).join(' ')
                           const isOpen = cb.status === 'proposed' || cb.status === 'failed' || cb.status === 'rejected' || cb.status === 'revising'
-                          const canChange = cb.status !== 'running' && cb.status !== 'done'
-                          const g = cb.status === 'approved' || cb.status === 'queued' || cb.status === 'proposed' ? 'pending' : cb.status === 'rejected' ? 'failed' : cb.status
+                          const canChange = cb.status !== 'running' && cb.status !== 'reviewing' && cb.status !== 'done'
+                          const g = cb.status === 'approved' || cb.status === 'queued' || cb.status === 'proposed' ? 'pending' : cb.status === 'rejected' ? 'failed' : cb.status === 'reviewing' ? 'doing' : cb.status
                           return (
                             <Box key={`cube-${cb.id}`} flexDirection="column" borderStyle="round" borderColor={col} paddingX={1}>
                               <Box>
@@ -597,7 +597,7 @@ export function registerDashboard(on: any): void {
                                 <Text dimColor>{`  ${cb.minutes}m`}</Text>
                                 {cb.thread && cb.thread.length > 0 ? <Text dimColor>{`  💬 ${cb.thread.length}`}</Text> : null}
                               </Box>
-                              <Text color={col}>{`${glyphOf(g)} ${cb.status}${cb.after.length ? ' · after ' + cb.after.join(',') : ''}`}</Text>
+                              <Text color={col}>{`${glyphOf(g)} ${cb.status === 'reviewing' ? 'in review' : cb.status}${cb.after.length ? ' · after ' + cb.after.join(',') : ''}`}</Text>
                               {flow.map((f, i) =>
                                 f === null ? (
                                   <Text key={`cube-${cb.id}-f${i}`} dimColor>{`… +${cb.flow.length - 2} more`}</Text>
@@ -828,11 +828,9 @@ export async function dashAnswerCube($: any, input: any): Promise<{ ok: boolean;
 export async function dashReviewCube($: any, input: any): Promise<{ ok: boolean; message: string }> {
   const s = await load($)
   if (!s.cubes) return { ok: false, message: 'no cube board' }
-  const r = reviewCubeResult(s.cubes, input, await $.clock.now())
-  if ('error' in r) return { ok: false, message: r.error }
-  put($, withBoard(c.snap ?? s, r.board))
+  const r = await applyReview(deps($, await $.clock.now()), input)
   await flush($)
-  return { ok: true, message: r.message }
+  return r
 }
 
 /** /tp-cubes on | off: the gate for the current board and new ones. */
@@ -844,6 +842,7 @@ export async function dashSetCubesGate($: any, isOn: boolean) {
 export function cubeColor(status: string): string {
   if (status === 'approved' || status === 'queued') return C_ACCENT
   if (status === 'running') return C_CUBE_RUN
+  if (status === 'reviewing') return C_WARN
   if (status === 'done') return C_DONE
   if (status === 'failed' || status === 'rejected') return C_OVER
   if (status === 'revising') return C_WARN

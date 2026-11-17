@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { addThreadMessage, answerCube, buildBoard, checkAtomic, computeLanes, finishAndRelease, flowLabel, gateCheck, normalizeBoardFlow, normalizeCube, reviewCubeResult, reviseCube, runCubeCommand, topoOrder } from './cubes-model'
+import { addThreadMessage, answerCube, applyReview, buildBoard, checkAtomic, computeLanes, finishAndRelease, flowLabel, gateCheck, normalizeBoardFlow, normalizeCube, reviewCubeResult, reviseCube, runCubeCommand, topoOrder } from './cubes-model'
 import { commandFromLine, parseBudget } from './dashboard-model'
 
 const st = (n: string, extra: any = {}) => ({ file: `${n}.ts`, fn: `${n}Fn`, does: `does ${n}`, ...extra })
@@ -102,12 +102,74 @@ test('approve with pending deps queues; finishing the dep releases it in one pro
   await run(g.d, 'cube.approve', { id: 'c1' })
   expect(g.prompts.length).toBe(1)
   g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, status: 'running', agentId: 'a1' } : c)) } })
-  const released = await finishAndRelease(g.d, 'a1', true)
-  expect(released.map(c => c.id)).toEqual(['c2', 'c3'])
+  // The executor finished: c1 waits for its review, so nothing is released yet.
+  const none = await finishAndRelease(g.d, 'a1', true)
+  expect(none).toEqual([])
+  expect(g.st('c1')).toBe('reviewing')
+  expect(g.st('c2')).toBe('queued')
   expect(g.prompts.length).toBe(2)
-  expect(g.prompts[1]).toContain('c2')
-  expect(g.prompts[1]).toContain('c3')
+  expect(g.prompts[1]).toContain('Cube c1 is in review: dispatch a review executor (Skill "pr-reviewer" on its files), then CubeReview.')
+  const r = await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
+  expect(r.ok).toBe(true)
+  expect(g.st('c1')).toBe('done')
+  expect(g.cube('c1').review.status).toBe('passed')
   expect(g.st('c2')).toBe('approved')
+  expect(g.prompts.length).toBe(3)
+  expect(g.prompts[2]).toContain('c2')
+  expect(g.prompts[2]).toContain('c3')
+})
+
+function running(g: any) {
+  g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, status: 'running', agentId: 'a1' } : c)) } })
+}
+
+test('review gates done: REQUEST_CHANGES reopens to approved, NEEDS_INVESTIGATION stays in review', async () => {
+  const g = rig(pair())
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  running(g)
+  await finishAndRelease(g.d, 'a1', true)
+  expect(g.st('c1')).toBe('reviewing')
+  expect(gateCheck(g.board(), ['c1'])).toContain('in review')
+  expect((await applyReview(g.d, { id: 'c1', verdict: 'NEEDS_INVESTIGATION', summary: '?' })).ok).toBe(true)
+  expect(g.st('c1')).toBe('reviewing')
+  expect(((await run(g.d, 'cube.review', { id: 'c1' })) as any).ok).toBe(true)
+  await applyReview(g.d, { id: 'c1', verdict: 'REQUEST_CHANGES', summary: 'fix', findings: [{ severity: 'P1', summary: 'bug' }] })
+  expect(g.st('c1')).toBe('approved')
+  expect(gateCheck(g.board(), ['c1'])).toBeNull()
+  expect(g.st('c2')).toBe('proposed')
+})
+
+test('cube.markDone forces a cube in review to done and releases dependents', async () => {
+  const g = rig(pair())
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  await run(g.d, 'cube.approve', { id: 'c2' })
+  running(g)
+  await finishAndRelease(g.d, 'a1', true)
+  expect(g.st('c2')).toBe('queued')
+  expect(((await run(g.d, 'cube.markDone', { id: 'c1' })) as any).ok).toBe(true)
+  expect(g.st('c1')).toBe('done')
+  expect(g.st('c2')).toBe('approved')
+})
+
+test('gate off: an executor finishing marks the cube done as before', async () => {
+  const g = rig(pair(), false)
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  await run(g.d, 'cube.approve', { id: 'c2' })
+  running(g)
+  await finishAndRelease(g.d, 'a1', true)
+  expect(g.st('c1')).toBe('done')
+  expect(g.st('c2')).toBe('approved')
+})
+
+test('a legacy cube (string flow) can be edited without a new flow, but a new flow is validated', async () => {
+  const g = rig(pair())
+  g.d.put({ ...g.d.get(), cubes: normalizeBoardFlow({ ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, flow: ['read it', 'write it'] } : c)) }) })
+  expect(g.cube('c1').flow[0].file).toBe('')
+  const good: any = await run(g.d, 'cube.update', { id: 'c1', minutes: 4 })
+  expect(good.ok).toBe(true)
+  expect(g.cube('c1').minutes).toBe(4)
+  const bad: any = await run(g.d, 'cube.update', { id: 'c1', flow: [{ file: '', fn: '', does: 'x' }, st('b')] })
+  expect(bad.ok).toBe(false)
 })
 
 test('approveAll sends independent cubes together and queues the rest', async () => {
