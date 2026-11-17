@@ -217,8 +217,10 @@ const CUBE_CHECK = {
 };
 const CUBE_FIELDS = Object.keys(CUBE_CHECK);
 
-// Each validator returns { args } with only whitelisted keys, or { error }.
-const ACTIONS = {
+// COMMANDS: the ONE allowlist for POST /api/command. Each validator returns { args } with only
+// whitelisted keys, or { error }. Later cubes add 'session.prompt', 'session.stop', 'perm.answer',
+// 'ticket.*' and 'file.*' here (one entry each, same validator style). Nothing outside this table runs.
+const COMMANDS = {
   'agent.stop': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
   'shell.stop': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
   'step.set': (a) => {
@@ -342,9 +344,43 @@ const ACTIONS = {
   'cubes.gate': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
 };
 
+// ---------- live event stream (v2) ----------
+// Ring buffer of the last EVENT_MAX events; seq is monotonically increasing and never reused.
+const EVENT_MAX = 2000;
+const EVENT_BATCH_MAX = 500;
+const events = [];
+let nextSeq = 1;
+const streamClients = new Set();
+
+function writeTo(set, res, frame) {
+  try {
+    res.write(frame);
+  } catch {
+    set.delete(res);
+  }
+}
+
+function eventFrame(ev) {
+  return `id: ${ev.seq}\ndata: ${JSON.stringify(ev)}\n\n`;
+}
+
+function addEvents(list) {
+  const added = [];
+  for (const raw of list) {
+    const ev = { ...raw, seq: nextSeq++ };
+    if (typeof ev.ts !== 'number') ev.ts = Date.now();
+    events.push(ev);
+    added.push(ev);
+  }
+  if (events.length > EVENT_MAX) events.splice(0, events.length - EVENT_MAX);
+  for (const res of streamClients) for (const ev of added) writeTo(streamClients, res, eventFrame(ev));
+  return added;
+}
+
 // ---------- SSE ----------
 function broadcastSnapshot() {
   const frame = `event: snapshot\ndata: ${latestSnapshot}\n\n`;
+  for (const res of streamClients) writeTo(streamClients, res, frame);
   for (const res of sseClients) {
     try {
       res.write(frame);
@@ -362,8 +398,47 @@ const heartbeat = setInterval(() => {
       sseClients.delete(res);
     }
   }
+  for (const res of streamClients) writeTo(streamClients, res, `: hb ${Date.now()}\n\n`);
 }, HEARTBEAT_MS);
 heartbeat.unref();
+
+// POST /api/events: body is one event object or an array of them. Token already checked.
+async function handleEvents(req, res) {
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return sendJson(res, e.status || 400, { ok: false, message: e.message });
+  }
+  const list = Array.isArray(body) ? body : [body];
+  if (!list.length || list.length > EVENT_BATCH_MAX) {
+    return sendJson(res, 400, { ok: false, message: `send 1-${EVENT_BATCH_MAX} events` });
+  }
+  if (!list.every((e) => e && typeof e === 'object' && !Array.isArray(e))) {
+    return sendJson(res, 400, { ok: false, message: 'each event must be a JSON object' });
+  }
+  const added = addEvents(list);
+  return sendJson(res, 200, { ok: true, seq: added[added.length - 1].seq });
+}
+
+// GET /api/stream?t=<token>[&since=<seq>]: Server-Sent Events. Token already checked (query param allowed).
+function handleStream(req, res, url) {
+  const sinceRaw = req.headers['last-event-id'] || url.searchParams.get('since') || '';
+  let since = /^\d+$/.test(String(sinceRaw)) ? parseInt(sinceRaw, 10) : 0;
+  if (since >= nextSeq) since = 0; // client saw a previous server run (seq restarted): replay everything
+  res.writeHead(200, {
+    ...BASE_HEADERS,
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-store',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  if (latestSnapshot) res.write(`event: snapshot\ndata: ${latestSnapshot}\n\n`);
+  for (const ev of events) if (ev.seq > since) res.write(eventFrame(ev));
+  streamClients.add(res);
+  req.on('close', () => streamClients.delete(res));
+}
 
 // ---------- routes ----------
 async function handle(req, res) {
@@ -456,6 +531,12 @@ async function handle(req, res) {
       return;
     }
 
+    case 'GET /api/stream':
+      return handleStream(req, res, url);
+
+    case 'POST /api/events':
+      return handleEvents(req, res);
+
     case 'POST /api/snapshot': {
       let body;
       try {
@@ -469,7 +550,7 @@ async function handle(req, res) {
       latestSnapshot = JSON.stringify(body);
       armIdleTimer(IDLE_MS);
       broadcastSnapshot();
-      return sendJson(res, 200, { ok: true, clients: sseClients.size });
+      return sendJson(res, 200, { ok: true, clients: sseClients.size + streamClients.size });
     }
 
     case 'POST /api/command': {
@@ -483,7 +564,7 @@ async function handle(req, res) {
         return sendJson(res, 400, { ok: false, message: 'command must be a JSON object' });
       }
       const action = body.action;
-      const validate = typeof action === 'string' && Object.prototype.hasOwnProperty.call(ACTIONS, action) ? ACTIONS[action] : null;
+      const validate = typeof action === 'string' && Object.prototype.hasOwnProperty.call(COMMANDS, action) ? COMMANDS[action] : null;
       if (!validate) return sendJson(res, 400, { ok: false, message: 'unknown action' });
       const rest = { ...body };
       delete rest.action;
@@ -581,6 +662,12 @@ function shutdown(code) {
     } catch {}
   }
   sseClients.clear();
+  for (const res of streamClients) {
+    try {
+      res.end();
+    } catch {}
+  }
+  streamClients.clear();
   try {
     server.close();
   } catch {}

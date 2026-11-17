@@ -155,10 +155,44 @@ TP.poll = function () {
   }).catch(function () { TP.banner('Lost contact with the dashboard server.'); });
 };
 
-// connect(): PLACEHOLDER. Cube c2 replaces this polling with the SSE stream (/api/events).
-TP.connect = function () {
+// connect(): live mode uses Server-Sent Events (/api/stream). EventSource reconnects by itself and
+// resends Last-Event-ID, so the server replays what was missed. Falls back to 2 s polling if
+// EventSource is missing or the stream endpoint answers an error (e.g. 404 from an older server).
+TP.lastSeq = 0;
+TP.startPolling = function () {
+  if (TP._polling) return;
+  TP._polling = true;
   TP.poll();
   setInterval(TP.poll, 2000);
+};
+TP.connect = function () {
+  if (typeof EventSource === 'undefined') return TP.startPolling();
+  var es = new EventSource('/api/stream?t=' + encodeURIComponent(TP.token)), downTimer = null, everOpen = false;
+  TP.es = es;
+  es.onopen = function () {
+    everOpen = true;
+    clearTimeout(downTimer); downTimer = null;
+    TP.banner('');
+  };
+  es.addEventListener('snapshot', function (m) {
+    try { TP.onState(JSON.parse(m.data)); } catch (e) { console.error('snapshot', e); }
+  });
+  es.onmessage = function (m) {
+    var ev;
+    try { ev = JSON.parse(m.data); } catch (e) { return; }
+    if (typeof ev.seq === 'number') TP.lastSeq = ev.seq; // EventSource resends it as Last-Event-ID
+    TP.emit(ev);
+  };
+  es.onerror = function () {
+    // CLOSED = the browser gave up (HTTP error such as 401/404): use polling instead.
+    if (es.readyState === 2) {
+      clearTimeout(downTimer);
+      if (!everOpen) TP.startPolling();
+      else TP.banner('Lost contact with the dashboard server.');
+      return;
+    }
+    if (!downTimer) downTimer = setTimeout(function () { TP.banner('Lost contact with the dashboard server. Reconnecting...'); }, 3000);
+  };
 };
 
 // ---- overlays and shortcuts ----
