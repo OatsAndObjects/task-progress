@@ -39,6 +39,14 @@ const MAX_BODY = 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 10000;
 const HEARTBEAT_MS = 15000;
 const INDEX_PATH = path.join(__dirname, 'index.html');
+const APP_DIR = path.resolve(__dirname, 'app');
+const APP_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+};
 // The mod re-POSTs a snapshot every 10 s. No snapshot for IDLE_MS after the first one,
 // or none at all within START_MS of start => the mod is gone, so exit.
 const IDLE_MS = Number.isInteger(args.idleMs) && args.idleMs > 0 ? args.idleMs : 35000;
@@ -381,6 +389,41 @@ async function handle(req, res) {
         "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     });
     return res.end(req.method === 'HEAD' ? undefined : html);
+  }
+
+  // ---- dashboard v2: static files from web/app (same token rules as the page: none for static, ?t= used by its API calls) ----
+  if (p === '/v2' || p.startsWith('/v2/')) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { ok: false, message: 'method not allowed' });
+    if (p === '/v2') {
+      res.writeHead(302, { ...BASE_HEADERS, Location: '/v2/' + url.search });
+      return res.end();
+    }
+    let rel;
+    try {
+      rel = decodeURIComponent(p.slice(4));
+    } catch {
+      return send(res, 400, 'bad path', 'text/plain; charset=utf-8');
+    }
+    if (rel === '') rel = 'index.html';
+    const full = path.resolve(APP_DIR, rel);
+    if (rel.includes('\0') || (full !== APP_DIR && !full.startsWith(APP_DIR + path.sep))) {
+      return send(res, 404, 'not found', 'text/plain; charset=utf-8');
+    }
+    const type = APP_TYPES[path.extname(full).toLowerCase()];
+    let data;
+    try {
+      if (!type || !fs.statSync(full).isFile()) return send(res, 404, 'not found', 'text/plain; charset=utf-8');
+      data = fs.readFileSync(full);
+    } catch {
+      return send(res, 404, 'not found', 'text/plain; charset=utf-8');
+    }
+    const headers = { ...BASE_HEADERS, 'Content-Type': type, 'Content-Length': data.length };
+    if (type.startsWith('text/html')) {
+      headers['Content-Security-Policy'] =
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+    }
+    res.writeHead(200, headers);
+    return res.end(req.method === 'HEAD' ? undefined : data);
   }
 
   if (p === '/favicon.ico') {

@@ -1,0 +1,171 @@
+'use strict';
+// Task Progress dashboard v2: core. Namespace, token, routing, polling, shortcuts.
+var TP = window.TP = { screens: {}, state: null, token: '', current: '' };
+
+TP.SCREENS = ['session', 'board', 'cubes', 'review', 'files', 'usage'];
+TP.ICONS = {
+  chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+  board: '<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="13" rx="1.5"/>',
+  cube: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5L16 9.5"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'
+};
+
+TP.$ = function (id) { return document.getElementById(id); };
+
+TP.icons = function (root) {
+  (root || document).querySelectorAll('[data-ic]').forEach(function (el) {
+    var p = TP.ICONS[el.getAttribute('data-ic')];
+    if (p && !el.firstChild) el.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + p + '</svg>';
+  });
+};
+
+TP.toast = function (msg) {
+  var t = TP.$('toast'); if (!t) return;
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(TP._tt); TP._tt = setTimeout(function () { t.classList.remove('on'); }, 2600);
+};
+
+TP.banner = function (msg) {
+  var b = TP.$('banner'); b.textContent = msg || ''; b.classList.toggle('show', !!msg);
+};
+
+// ---- token: ?t= is read once, kept in sessionStorage, stripped from the URL ----
+TP.initToken = function () {
+  var KEY = 'tp-token', params = new URLSearchParams(location.search), t = params.get('t');
+  if (t) {
+    TP.token = t;
+    try { sessionStorage.setItem(KEY, t); } catch (e) {}
+    params.delete('t');
+    var q = params.toString();
+    try { history.replaceState(null, '', location.pathname + (q ? '?' + q : '') + location.hash); } catch (e) {}
+  } else {
+    try { TP.token = sessionStorage.getItem(KEY) || ''; } catch (e) { TP.token = ''; }
+  }
+};
+
+// ---- API (same endpoints as the v1 page; paths are absolute) ----
+TP.api = function (method, path, body) {
+  var opts = { method: method, headers: { 'X-TP-Token': TP.token }, cache: 'no-store' };
+  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  return fetch(path, opts).then(function (r) {
+    return r.text().then(function (t) {
+      var data = null;
+      try { data = t ? JSON.parse(t) : null; } catch (e) {}
+      if (r.status === 401) TP.banner('This page has no valid token. Open the dashboard again from Claude Code.');
+      return { status: r.status, data: data };
+    });
+  });
+};
+
+// ---- routing ----
+TP.route = function () {
+  var name = (location.hash || '').replace(/^#\/?/, '').split('/')[0];
+  if (TP.SCREENS.indexOf(name) < 0) name = 'session';
+  TP.current = name;
+  TP.SCREENS.forEach(function (s) {
+    var sec = TP.$('screen-' + s);
+    var on = s === name;
+    sec.hidden = !on; sec.classList.toggle('on', on);
+  });
+  document.querySelectorAll('.navb').forEach(function (b) {
+    var on = b.getAttribute('data-nav') === name;
+    b.classList.toggle('on', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
+  TP.renderCurrent();
+};
+
+TP.go = function (name) {
+  if (location.hash !== '#' + name) location.hash = '#' + name; else TP.route();
+};
+
+TP.renderCurrent = function () {
+  var scr = TP.screens[TP.current];
+  if (scr && typeof scr.render === 'function') {
+    try { scr.render(TP.state); } catch (e) { console.error('render ' + TP.current, e); }
+  }
+};
+
+// ---- top bar ----
+TP.renderTop = function (st) {
+  var name = (st && st.progress && st.progress.task) || 'Session';
+  TP.$('sess-name').textContent = name;
+  TP.$('sess-cwd').textContent = (st && st.session && st.session.cwd) || '';
+  var model = st && st.session && st.session.model;
+  var mc = TP.$('model-chip'); mc.hidden = !model; if (model) mc.textContent = model;
+  var chip = TP.$('status'), txt = TP.$('status-text');
+  var busy = !!(st && st.progress && !st.progress.done);
+  chip.className = 'chip ' + (!st ? '' : busy ? 'warn' : 'ok');
+  txt.textContent = !st ? 'Waiting for Claude' : busy ? 'Working' : 'Idle';
+  // Mini meters: state.usage arrives with cube c6. Hidden until then.
+  var u = st && st.usage, any = false;
+  [['mm-ctx', 'Context', u && u.context], ['mm-5h', '5h', u && u.fiveHour], ['mm-week', 'Week', u && u.week]].forEach(function (m) {
+    var el = TP.$(m[0]), pct = m[2] && typeof m[2].pct === 'number' ? Math.max(0, Math.min(100, Math.round(m[2].pct))) : null;
+    el.hidden = pct === null;
+    if (pct === null) return;
+    any = true;
+    el.firstChild.textContent = m[1] + ' ' + pct + '%';
+    el.querySelector('u').style.width = pct + '%';
+    el.classList.toggle('hot', pct >= 75);
+  });
+  TP.$('meters').hidden = !any;
+};
+
+// ---- data ----
+TP.onState = function (st) {
+  TP.state = st;
+  TP.renderTop(st);
+  TP.renderCurrent();
+};
+
+TP.poll = function () {
+  TP.api('GET', '/api/snapshot').then(function (r) {
+    if (r.status === 200) { TP.banner(''); TP.onState(r.data); }
+  }).catch(function () { TP.banner('Lost contact with the dashboard server.'); });
+};
+
+// connect(): PLACEHOLDER. Cube c2 replaces this polling with the SSE stream (/api/events).
+TP.connect = function () {
+  TP.poll();
+  setInterval(TP.poll, 2000);
+};
+
+// ---- overlays and shortcuts ----
+TP.closeAll = function () {
+  document.querySelectorAll('.modal.on,.drawer.on,.pal.on,.pop.on,.scrim.on').forEach(function (e) { e.classList.remove('on'); });
+};
+TP.openPalette = function () { TP.toast('Search is coming soon'); };      // placeholder
+TP.newTicket = function () { TP.toast('New ticket is coming soon'); };    // placeholder
+
+TP.keys = function (e) {
+  var tag = (e.target && e.target.tagName || '').toLowerCase();
+  var typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable);
+  if (e.key === 'Escape') { TP.closeAll(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); TP.openPalette(); return; }
+  if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'n') { e.preventDefault(); TP.newTicket(); }
+};
+
+TP.boot = function () {
+  TP.initToken();
+  TP.icons();
+  document.querySelectorAll('[data-nav]').forEach(function (b) {
+    b.addEventListener('click', function () { TP.go(b.getAttribute('data-nav')); });
+  });
+  document.querySelectorAll('[data-act]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var a = b.getAttribute('data-act');
+      if (a === 'palette') TP.openPalette();
+      else if (a === 'newTicket') TP.newTicket();
+      else if (a === 'stop') TP.toast('Stop is coming soon');
+    });
+  });
+  TP.$('scrim').addEventListener('click', TP.closeAll);
+  document.addEventListener('keydown', TP.keys);
+  window.addEventListener('hashchange', TP.route);
+  TP.route();
+  TP.connect();
+};
