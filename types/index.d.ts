@@ -95,6 +95,25 @@ export type UserTask = {
   updatedAt: number
   source: 'user' | 'plan'
 }
+export type TicketStatus = 'todo' | 'doing' | 'review' | 'blocked' | 'done'
+export type TicketType = 'feature' | 'bug' | 'task'
+export type TicketPriority = 'low' | 'med' | 'high'
+/** A Jira-style ticket on the web Board. */
+export type Ticket = {
+  key: string
+  type: TicketType
+  priority: TicketPriority
+  title: string
+  description: string
+  checks: { text: string; done: boolean }[]
+  assignee: string
+  status: TicketStatus
+  activity: { who: 'you' | 'claude'; text: string; at: number }[]
+  createdAt: number
+  updatedAt: number
+  /** Id of the old task this ticket was migrated from. */
+  legacyId?: string
+}
 /** One function-level step of a cube. Boards stored before 0.10 hold strings, normalized to `{file:'',fn:'',does}`. */
 export type FlowStep = {
   /** Repo-relative path, or "shell" / "browser" / "terminal" for non-code steps. */
@@ -187,6 +206,8 @@ export type Snapshot = {
   /** Newest last, at most 200. */
   toolLog: SnapshotToolEntry[]
   tasks: UserTask[]
+  tickets: Ticket[]
+  columns: TicketStatus[]
   /** The approval cube board of the current task, if it was planned in cubes. */
   cubes: CubeBoard | null
   usage: SnapshotUsage | null

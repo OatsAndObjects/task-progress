@@ -47,7 +47,7 @@ const TASK_STATUSES: readonly UserTaskStatus[] = ['todo', 'doing', 'blocked', 'd
 const PRIORITIES: readonly UserTaskPriority[] = ['low', 'med', 'high']
 
 export function emptySnapshot(session: Snapshot['session'], orchestrate = true, tasks: UserTask[] = []): Snapshot {
-  return { session, orchestrate, progress: null, plan: null, agents: [], shells: [], files: [], toolLog: [], tasks, cubes: null, usage: null }
+  return { session, orchestrate, progress: null, plan: null, agents: [], shells: [], files: [], toolLog: [], tasks, tickets: [], columns: ['todo', 'doing', 'review', 'blocked', 'done'], cubes: null, usage: null }
 }
 
 export const PER_TURN_MAX = 40

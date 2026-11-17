@@ -164,6 +164,9 @@ const PRIORITY = ['low', 'med', 'high'];
 const isId = (v) => typeof v === 'string' && v.length > 0 && v.length <= 200;
 const isStr = (v, max) => typeof v === 'string' && v.length <= max;
 const isText = (v, max) => isStr(v, max) && v.trim().length > 0;
+const TICKET_TYPE = ['feature', 'bug', 'task'];
+const TICKET_STATUS = ['todo', 'doing', 'review', 'blocked', 'done'];
+const isTicketKey = (v) => typeof v === 'string' && (/^TP-\d{1,6}$/.test(v) || /^[A-Za-z0-9_.:-]{1,64}$/.test(v));
 
 // Cube board fields. Strings are trimmed; arrays hold strings only.
 const isCubeId = (v) => typeof v === 'string' && v.trim().length > 0 && v.trim().length <= 40;
@@ -270,6 +273,68 @@ const COMMANDS = {
   },
   'task.delete': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
   'task.send': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
+  // ---- tickets (Board screen); key is TP-n or a legacy task id ----
+  'ticket.create': (a) => {
+    if (!isText(a.title, 200)) return { error: 'title required (max 200 chars)' };
+    if (!TICKET_TYPE.includes(a.type)) return { error: 'type must be one of ' + TICKET_TYPE.join(', ') };
+    if (!PRIORITY.includes(a.priority)) return { error: 'priority must be one of ' + PRIORITY.join(', ') };
+    const out = { type: a.type, priority: a.priority, title: a.title.trim() };
+    if (a.description !== undefined && a.description !== null) {
+      if (!isStr(a.description, 10000)) return { error: 'description must be text (max 10000 chars)' };
+      out.description = a.description;
+    }
+    if (a.checks !== undefined && a.checks !== null) {
+      if (!Array.isArray(a.checks) || a.checks.length > 50 || !a.checks.every((x) => isStr(x, 300))) return { error: 'checks must be up to 50 texts (max 300 chars each)' };
+      out.checks = a.checks;
+    }
+    if (a.assignee !== undefined && a.assignee !== null && a.assignee !== '') {
+      if (!isText(a.assignee, 60)) return { error: 'assignee must be text (max 60 chars)' };
+      out.assignee = a.assignee.trim();
+    }
+    return { args: out };
+  },
+  'ticket.move': (a) => {
+    if (!isTicketKey(a.key)) return { error: 'key required' };
+    if (!TICKET_STATUS.includes(a.status)) return { error: 'status must be one of ' + TICKET_STATUS.join(', ') };
+    return { args: { key: a.key, status: a.status } };
+  },
+  'ticket.check': (a) => {
+    if (!isTicketKey(a.key)) return { error: 'key required' };
+    if (!Number.isInteger(a.index) || a.index < 0 || a.index >= 50) return { error: 'index must be 0 to 49' };
+    if (typeof a.done !== 'boolean') return { error: 'done must be true or false' };
+    return { args: { key: a.key, index: a.index, done: a.done } };
+  },
+  'ticket.comment': (a) => {
+    if (!isTicketKey(a.key)) return { error: 'key required' };
+    return isText(a.text, 4000) ? { args: { key: a.key, text: a.text } } : { error: 'text required (max 4000 chars)' };
+  },
+  'ticket.assign': (a) => {
+    if (!isTicketKey(a.key)) return { error: 'key required' };
+    if (a.assignee === undefined || a.assignee === null || a.assignee === '') return { args: { key: a.key, assignee: '' } };
+    return isText(a.assignee, 60) ? { args: { key: a.key, assignee: a.assignee.trim() } } : { error: 'assignee must be text (max 60 chars)' };
+  },
+  'ticket.update': (a) => {
+    if (!isTicketKey(a.key)) return { error: 'key required' };
+    const out = { key: a.key };
+    if (a.title !== undefined) {
+      if (!isText(a.title, 200)) return { error: 'title must be non-empty (max 200 chars)' };
+      out.title = a.title.trim();
+    }
+    if (a.description !== undefined) {
+      if (!isStr(a.description, 10000)) return { error: 'description must be text (max 10000 chars)' };
+      out.description = a.description;
+    }
+    if (a.type !== undefined) {
+      if (!TICKET_TYPE.includes(a.type)) return { error: 'type must be one of ' + TICKET_TYPE.join(', ') };
+      out.type = a.type;
+    }
+    if (a.priority !== undefined) {
+      if (!PRIORITY.includes(a.priority)) return { error: 'priority must be one of ' + PRIORITY.join(', ') };
+      out.priority = a.priority;
+    }
+    return Object.keys(out).length === 1 ? { error: 'nothing to update' } : { args: out };
+  },
+  'ticket.delete': (a) => (isTicketKey(a.key) ? { args: { key: a.key } } : { error: 'key required' }),
   'prompt.send': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
   'orchestrate.set': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
 
