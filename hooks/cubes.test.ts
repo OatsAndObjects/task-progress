@@ -108,7 +108,7 @@ test('approve with pending deps queues; finishing the dep releases it in one pro
   expect(g.st('c1')).toBe('reviewing')
   expect(g.st('c2')).toBe('queued')
   expect(g.prompts.length).toBe(2)
-  expect(g.prompts[1]).toContain('Cube c1 is in review: dispatch a review executor (Skill "pr-reviewer" on its files), then CubeReview.')
+  expect(g.prompts[1]).toContain('Cube c1 is in review: dispatch a review executor tagged "[budget: <N>m step: <k> review: c1]" (Skill "pr-reviewer" on its files), then CubeReview.')
   const r = await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
   expect(r.ok).toBe(true)
   expect(g.st('c1')).toBe('done')
@@ -436,4 +436,38 @@ test('reviewCubeResult validates input and caps sizes', () => {
   expect(rv.quiz.length).toBe(10)
   expect(rv.summary.length).toBe(4000)
   expect(rv.understanding.length).toBe(4000)
+})
+
+test('parseBudget reads review: ids', () => {
+  expect(parseBudget('[budget: 6m step: 2 review: c6] x')).toEqual({ minutes: 6, step: 2, review: ['c6'] })
+  expect(parseBudget('[budget: 6m step: 2 review: c1,c2]')).toEqual({ minutes: 6, step: 2, review: ['c1', 'c2'] })
+})
+
+test('reviewing deadlock: cubes:/untagged are denied pointing to review:, review: passes, agent finish keeps status', async () => {
+  const g = rig(pair())
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  running(g)
+  await finishAndRelease(g.d, 'a1', true)
+  expect(g.st('c1')).toBe('reviewing')
+  expect(gateCheck(g.board(), ['c1'])).toContain('review:')
+  expect(gateCheck(g.board(), undefined)).toContain('tag')
+  expect(gateCheck(g.board(), undefined, ['c1'])).toBeNull()
+  expect(gateCheck(g.board(), ['c1'], ['c1'])).toContain('not both')
+  expect(gateCheck(g.board(), undefined, ['c9'])).toContain('no cube c9')
+  // c2 is proposed: not reviewable
+  expect(gateCheck(g.board(), undefined, ['c2'])).toContain('not in review')
+  // a review agent finishing changes nothing (it was never mapped to the cube)
+  await finishAndRelease(g.d, 'review-agent', true)
+  expect(g.st('c1')).toBe('reviewing')
+  expect((await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })).ok).toBe(true)
+  expect(g.st('c1')).toBe('done')
+  expect(gateCheck(g.board(), undefined, ['c1'])).toBeNull()
+})
+
+test('review: on approved or running cubes is denied', async () => {
+  const g = rig(pair())
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  expect(gateCheck(g.board(), undefined, ['c1'])).toContain('not in review')
+  running(g)
+  expect(gateCheck(g.board(), undefined, ['c1'])).toContain('not in review')
 })

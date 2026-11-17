@@ -16,10 +16,10 @@ import type {
 import { finishAndRelease, runCubeCommand } from './cubes-model'
 
 /**
- * `[budget: 12m step: 2]` (optionally `cubes: c3,c4`) in a dispatch prompt; null when
+ * `[budget: 12m step: 2]` (optionally `cubes: c3,c4` for executors, or `review: c3` for a PR-review agent) in a dispatch prompt; null when
  * there is no (valid) tag. `cubes` is present only when the tag names some.
  */
-export function parseBudget(prompt: unknown): { minutes: number; step: number | null; cubes?: string[] } | null {
+export function parseBudget(prompt: unknown): { minutes: number; step: number | null; cubes?: string[]; review?: string[] } | null {
   if (typeof prompt !== 'string') return null
   const lower = prompt.toLowerCase()
   const open = lower.indexOf('[budget:')
@@ -33,7 +33,9 @@ export function parseBudget(prompt: unknown): { minutes: number; step: number | 
   const st = /step:\s*(\d+)/.exec(inner)
   const cu = /cubes?:\s*((?:[a-z0-9_-]+\s*,\s*)*[a-z0-9_-]+)/.exec(inner)
   const cubes = cu ? [...new Set(cu[1]!.split(/\s*,\s*/).filter(x => x !== ''))] : []
-  return { minutes, step: st ? Number(st[1]) : null, ...(cubes.length > 0 ? { cubes } : {}) }
+  const rv = /reviews?:\s*((?:[a-z0-9_-]+\s*,\s*)*[a-z0-9_-]+)/.exec(inner)
+  const review = rv ? [...new Set(rv[1]!.split(/\s*,\s*/).filter(x => x !== ''))] : []
+  return { minutes, step: st ? Number(st[1]) : null, ...(cubes.length > 0 ? { cubes } : {}), ...(review.length > 0 ? { review } : {}) }
 }
 
 export const TOOL_LOG_MAX = 200

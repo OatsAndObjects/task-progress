@@ -428,7 +428,7 @@ export function reviewPrompt(c: Cube): string {
   const files = reviewFiles(c)
   return (
     `[cube review ${c.id} "${c.title}"] Run the pr-reviewer skill on this cube's changes (files: ${files.length ? files.join(', ') : 'see the cube diff'}). ` +
-    `Dispatch it to a task-progress:executor whose prompt tells it to invoke Skill "pr-reviewer" on those files/diff and return verdict, findings (P0-P3 with file:line), ` +
+    `Dispatch it to a task-progress:executor whose first line is "[budget: <N>m step: <k> review: ${c.id}]" and whose prompt tells it to invoke Skill "pr-reviewer" on those files/diff and return verdict, findings (P0-P3 with file:line), ` +
     `the understanding summary and 3 quiz questions; then call CubeReview with id "${c.id}".`
   )
 }
@@ -483,8 +483,18 @@ export function changePrompt(c: Cube, note: string): string {
 }
 
 /** The deny message for a main-session Agent dispatch, or null when it may go. */
-export function gateCheck(board: CubeBoard | null | undefined, tagged: string[] | undefined): string | null {
+export function gateCheck(board: CubeBoard | null | undefined, tagged: string[] | undefined, review?: string[]): string | null {
   if (!board || !board.gate) return null
+  if (review && review.length > 0) {
+    if (tagged && tagged.length > 0) return 'A dispatch carries either "cubes:" (executors) or "review:" (a PR review), not both. Dispatch them separately.'
+    for (const raw of review) {
+      const id = raw.toLowerCase()
+      const c = board.cubes.find(x => x.id === id)
+      if (!c) return `There is no cube ${id} on the board. Tag "review:" only with existing cubes.`
+      if (c.status !== 'reviewing' && c.status !== 'done' && c.status !== 'failed') return `Cube ${id} is ${c.status}, not in review: "review:" is only for a cube whose executor finished (reviewing; done or failed for a re-review). Use "cubes: ${id}" to run it.`
+    }
+    return null
+  }
   const ids = (tagged ?? []).map(x => x.toLowerCase())
   if (ids.length === 0) {
     if (!isBoardOpen(board)) return null
@@ -498,7 +508,7 @@ export function gateCheck(board: CubeBoard | null | undefined, tagged: string[] 
     if (c.status === 'queued') return `Cube ${id} is approved but waits for ${c.after.filter(a => !SATISFIED.includes(board.cubes.find(x => x.id === a)?.status as CubeStatus)).join(', ')} to finish — wait for it.`
     if (c.status === 'running') return `Cube ${id} is already running.`
     if (c.status === 'done') return `Cube ${id} is already done.`
-    if (c.status === 'reviewing') return `Cube ${id} is in review: dispatch a review executor (Skill "pr-reviewer"), then CubeReview. Only a REQUEST_CHANGES review reopens it for a fix.`
+    if (c.status === 'reviewing') return `Cube ${id} is in review: dispatch the review with the first line "[budget: <N>m step: <k> review: ${id}]" (not "cubes:"; Skill "pr-reviewer"), then CubeReview. Only a REQUEST_CHANGES review reopens it for a fix.`
     if (c.status === 'revising') return `Cube ${id} is waiting for your CubeRevise and then the user's approval — wait for it.`
     return `Cube ${id} is waiting for the user's approval — wait for it.`
   }
@@ -610,7 +620,7 @@ export async function finishAndRelease(d: CubeDeps, agentId: string, isOk: boole
 
 /** The instruction that tells Claude a finished cube waits for its PR review. */
 export function reviewNotice(c: Pick<Cube, 'id'>): string {
-  return `Cube ${c.id} is in review: dispatch a review executor (Skill "pr-reviewer" on its files), then CubeReview.`
+  return `Cube ${c.id} is in review: dispatch a review executor tagged "[budget: <N>m step: <k> review: ${c.id}]" (Skill "pr-reviewer" on its files), then CubeReview.`
 }
 
 /** CubeReview from the model: stores the result; an APPROVE makes the cube done and releases its dependents. */

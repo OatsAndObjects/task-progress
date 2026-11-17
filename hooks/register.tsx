@@ -68,7 +68,7 @@ const ORCH_PROMPT = [
   `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt whose first line is "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
   '4) Do not edit code or run builds yourself; review reports, re-plan, update TaskProgress. If an executor ran out of time, re-dispatch the rest with a new budget.',
   'Multi-action tasks: TaskPlan `cubes` (id,title,action,flow 2-6 steps {file,fn,does,calls?} down to functions (non-code: file "shell", fn the command),after,doneWhen,minutes<=10), then STOP: the user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Changes: CubeRevise.',
-  'Each cube ends with a review: after its executor reports, dispatch one running Skill "pr-reviewer" on its changed files, then CubeReview; fix P0/P1 before done.',
+  'Each cube ends with a review: after its executor reports, dispatch one (tag "review: <id>", not cubes:) running Skill "pr-reviewer" on its changed files, then CubeReview; fix P0/P1 before done.',
   'Full protocol: skill task-progress:orchestrate. Executor agents ignore this section.',
 ].join(' ')
 
@@ -411,7 +411,7 @@ async function gateDecision($: any, e: any, isOwnCall: boolean, c: Ctx): Promise
     }
     if (e.tool === 'Agent') {
       const board = await dashGetCubes($)
-      const msg = gateCheck(board, parseBudget(e.prompt)?.cubes)
+      const msg = gateCheck(board, parseBudget(e.prompt)?.cubes, parseBudget(e.prompt)?.review)
       if (msg) return { deny: `Approval cubes: ${msg}` }
     }
     return {}
