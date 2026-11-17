@@ -261,3 +261,46 @@ test('the pane renders every section title', async ($: any, on: any) => {
     expect(text).toContain(title)
   }
 })
+
+import { PER_TURN_MAX, addTurnUsage, setMeasure } from './dashboard-model'
+
+test('session.measure fills snapshot.usage', () => {
+  const s = setMeasure(
+    base(),
+    {
+      context: { tokens: 50000, window: 200000, percent: 25 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: 40, resetsAt: 'a' },
+        { kind: 'seven_day', percentUsed: 10, resetsAt: 'b' },
+      ],
+      cost: { usd: 1.5 },
+    },
+    5,
+  )
+  expect(s.usage?.context).toEqual({ tokens: 50000, window: 200000, percent: 25 })
+  expect(s.usage?.fiveHour).toEqual({ percent: 40, resetsAt: 'a' })
+  expect(s.usage?.weekly).toEqual({ percent: 10, resetsAt: 'b' })
+  expect(s.usage?.cost).toEqual({ usd: 1.5 })
+})
+
+test('empty rateLimits give null windows', () => {
+  const s = setMeasure(base(), { context: { window: 1000 }, rateLimits: [] }, 1)
+  expect(s.usage?.fiveHour).toBeNull()
+  expect(s.usage?.weekly).toBeNull()
+  expect(s.usage?.cost).toBeNull()
+})
+
+test('turn token totals accumulate and survive a measure', () => {
+  let s = addTurnUsage(base(), { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, 1)
+  s = addTurnUsage(s, { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, 2)
+  s = setMeasure(s, { context: { window: 10 }, rateLimits: [] }, 3)
+  expect(s.usage?.tokens).toEqual({ input: 11, output: 22, cacheRead: 3, cacheWrite: 4 })
+  expect(s.usage?.perTurn).toEqual([10, 30])
+})
+
+test('perTurn is capped at 40', () => {
+  let s = base()
+  for (let i = 0; i < 55; i++) s = addTurnUsage(s, { input_tokens: i, output_tokens: 0 }, i)
+  expect(s.usage?.perTurn.length).toBe(PER_TURN_MAX)
+  expect(s.usage?.perTurn[39]).toBe(54)
+})

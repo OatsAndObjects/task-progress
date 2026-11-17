@@ -20,7 +20,9 @@ import {
   commandFromLine,
   randomToken,
   runCommand,
+  addTurnUsage,
   setAgentStatus,
+  setMeasure,
   setPlan,
   setProgress,
   setShellStatus,
@@ -363,6 +365,18 @@ export async function onSessionStart($: any, e: any) {
   await $.state.set(snapRef, c.snap)
   await $.state.set(webRef, c.web ? { port: c.web.port, url: c.web.url } : null)
   syncPoll($)
+  try {
+    const u = await $.session.usage()
+    await mutate($, s => setMeasure(s, u, now))
+  } catch {
+    // best effort: session.measure fills it later
+  }
+}
+
+// session.measure: context, 5-hour and weekly limits, cost.
+export async function dashUsage($: any, e: any) {
+  const now: number = await $.clock.now()
+  await mutate($, s => setMeasure(s, e, now))
 }
 
 // Every tool call: the log; edits; background shells.
@@ -413,6 +427,10 @@ export async function onAgentSpawn($: any, e: any, out: any) {
 }
 
 export async function onTurnComplete($: any, e: any) {
+  if (e.usage) {
+    const at: number = await $.clock.now()
+    await mutate($, s => addTurnUsage(s, e.usage, at))
+  }
   const id = e.agentId as string | undefined
   if (id) {
     const now: number = await $.clock.now()

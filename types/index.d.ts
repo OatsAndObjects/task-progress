@@ -156,6 +156,18 @@ export type CubeBoard = {
   /** Cube ids grouped by dependency depth (computed): lane 0 has no deps. */
   lanes: string[][]
 }
+/** Usage numbers shown on the dashboard. */
+export type SnapshotUsage = {
+  context: { tokens: number | null; window: number; percent: number | null }
+  fiveHour: { percent: number; resetsAt: string | null } | null
+  weekly: { percent: number; resetsAt: string | null } | null
+  cost: { usd: number } | null
+  /** Session totals, summed from each turn's usage. */
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }
+  /** Total tokens of the last 40 turns, newest last. */
+  perTurn: number[]
+  updatedAt: number
+}
 /** The session dashboard's whole state; the web app reads exactly this shape. */
 export type Snapshot = {
   session: { id: string; cwd: string; startedAt: number }
@@ -170,6 +182,7 @@ export type Snapshot = {
   tasks: UserTask[]
   /** The approval cube board of the current task, if it was planned in cubes. */
   cubes: CubeBoard | null
+  usage: SnapshotUsage | null
 }
 /** A dashboard command, from the pane or the web bridge: `{ action, ...args }`. */
 export type DashboardCommand = { action: string; [arg: string]: unknown }

@@ -8,6 +8,7 @@ import {
   dashMode,
   dashReviseCube,
   dashSetCubes,
+  dashUsage,
   dashSetCubesGate,
   dashPlan,
   dashProgress,
@@ -833,6 +834,11 @@ export const register: Register = on => {
       }
     }
     await quiet(onTurnComplete($, e))
+    return next(e)
+  })
+
+  on('session.measure', async ($, e, next) => {
+    await quiet(dashUsage($, e))
     return next(e)
   })
 
