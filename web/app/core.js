@@ -1,6 +1,9 @@
 'use strict';
 // Task Progress dashboard v2: core. Namespace, token, routing, polling, shortcuts.
-var TP = window.TP = { screens: {}, state: null, token: '', current: '' };
+// Screen contract: TP.screens.X = { render(state), onEvent(ev)? }. render runs on every state change and when
+// the screen is shown; onEvent gets live session events (TP.events holds the last 2000 for replay).
+// Screens send commands ONLY through TP.send(type, payload); they never fetch directly.
+var TP = window.TP = { screens: {}, state: null, token: '', current: '', events: [], demoMode: /[?&]demo=1/.test(location.search) };
 
 TP.SCREENS = ['session', 'board', 'cubes', 'review', 'files', 'usage'];
 TP.ICONS = {
@@ -59,6 +62,30 @@ TP.api = function (method, path, body) {
       return { status: r.status, data: data };
     });
   });
+};
+
+// ---- events and commands ----
+TP.emit = function (ev) {
+  TP.events.push(ev);
+  if (TP.events.length > 2000) TP.events.splice(0, TP.events.length - 2000);
+  TP.SCREENS.forEach(function (n) {
+    var s = TP.screens[n];
+    if (s && typeof s.onEvent === 'function') { try { s.onEvent(ev); } catch (e) { console.error('onEvent ' + n, e); } }
+  });
+};
+
+// Sends {action: type, ...payload} to POST /api/command (same as v1). Resolves { ok, message, status, data }.
+TP.send = function (type, payload) {
+  if (TP.demoMode) {
+    console.info('Demo send', type, payload);
+    TP.toast('Demo: ' + type);
+    return Promise.resolve({ ok: true, message: 'demo', status: 200, data: null });
+  }
+  return TP.api('POST', '/api/command', Object.assign({ action: type }, payload || {})).then(function (r) {
+    var d = r.data || {}, ok = r.status === 200 && d.ok === true;
+    if (!ok) TP.toast(d.message || 'Failed (' + r.status + ')');
+    return { ok: ok, message: d.message || '', status: r.status, data: d };
+  }).catch(function () { TP.toast('Lost contact with the dashboard server.'); return { ok: false, message: 'network', status: 0, data: null }; });
 };
 
 // ---- routing ----
@@ -150,7 +177,7 @@ TP.keys = function (e) {
 };
 
 TP.boot = function () {
-  TP.initToken();
+  if (!TP.demoMode) TP.initToken();
   TP.icons();
   document.querySelectorAll('[data-nav]').forEach(function (b) {
     b.addEventListener('click', function () { TP.go(b.getAttribute('data-nav')); });
@@ -160,12 +187,16 @@ TP.boot = function () {
       var a = b.getAttribute('data-act');
       if (a === 'palette') TP.openPalette();
       else if (a === 'newTicket') TP.newTicket();
-      else if (a === 'stop') TP.toast('Stop is coming soon');
+      else if (a === 'stop') TP.send('session.stop');
     });
   });
   TP.$('scrim').addEventListener('click', TP.closeAll);
   document.addEventListener('keydown', TP.keys);
   window.addEventListener('hashchange', TP.route);
   TP.route();
-  TP.connect();
+  if (TP.demoMode && TP.demo) {
+    document.title = 'Task Progress v2 (demo)';
+    TP.onState(TP.demo.state);
+    TP.demo.play();
+  } else TP.connect();
 };
