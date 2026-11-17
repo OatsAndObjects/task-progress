@@ -64,6 +64,10 @@ For a multi-action task, Claude calls `TaskPlan` with `cubes` instead of plain s
 
 If another plugin bypasses prompt.compose, the rules are attached to user prompts instead (in full on the first prompt, then a one-line reminder while orchestrator mode is on).
 
+## Night-sky restyle (0.8.0)
+
+Night-sky dashboard restyle. Web: starfield, constellation progress, countdown rings, telemetry log, glass kanban, light theme. Pane: bordered sections with glyphs, ▰▱ budget bars.
+
 ## Install (local directory marketplace)
 
 Place this folder inside a directory that you add as a local marketplace, then install the plugin from it:

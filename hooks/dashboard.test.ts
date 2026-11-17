@@ -240,3 +240,24 @@ test('/tp-dashboard opens the pane', async ($: any, on: any) => {
   expect(opened[0].id).toBe('tp-dashboard')
   expect((await $.command.run({ command: 'tp-dashboard', args: 'bogus' })).text).toContain('Usage: /tp-dashboard')
 })
+
+test('the pane renders every section title', async ($: any, on: any) => {
+  mock.clock(on, { now: 1_000_000 })
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'tp-dashboard' })
+  const ui = await $.ui.mount({
+    plugin: 'task-progress',
+    component: 'Pane',
+    requestId: 'tp-dashboard',
+    surface: 'terminal',
+    props: { bodyColumns: 110 },
+  })
+  const text = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
+  await ui.unmount()
+  for (const title of ['Plan', 'Executors', 'Tools', 'Tasks', 'Background shells', 'Files changed']) {
+    expect(text).toContain(title)
+  }
+})

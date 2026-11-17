@@ -479,159 +479,271 @@ export function registerDashboard(on: any): void {
         if (!r.ok) $.ui.toast(r.message)
       })
     }
-    const head = (title: string, extra?: string) => (
-      <Box marginTop={1}>
-        <Text bold color={C_ACCENT}>{title}</Text>
-        {extra ? <Text dimColor>{'  ' + extra}</Text> : null}
+    if (!s) return <Text dimColor>No session data yet.</Text>
+
+    const inner = width - 4
+    const section = (glyph: string, title: string, extra: string | undefined, body: any[], key: string) => (
+      <Box key={key} flexDirection="column" borderStyle="round" borderColor={C_DIM} paddingX={1}>
+        <Box>
+          <Text bold color={C_ACCENT}>{`${glyph} ${title}`}</Text>
+          {extra ? <Text dimColor>{'  ' + extra}</Text> : null}
+        </Box>
+        {body}
       </Box>
     )
-    if (!s) return <Text dimColor>No session data yet.</Text>
+    const none = (t = 'none') => <Text key="none" dimColor>{t}</Text>
+    const glyphOf = (st: string) =>
+      st === 'done'
+        ? '✓'
+        : st === 'running' || st === 'doing'
+          ? '◐'
+          : st === 'failed' || st === 'blocked' || st === 'over'
+            ? '✗'
+            : st === 'stopped' || st === 'idle'
+              ? '◌'
+              : st === 'skipped'
+                ? '–'
+                : '○'
+    const glyphColor = (st: string) => statusColor(st) ?? C_DIM
+    // A 10-cell countdown of the budget used: blue, amber after 80%, red over.
+    const miniBar = (used: number, budget: number) => {
+      const f = budget > 0 ? used / budget : 0
+      const n = Math.min(10, Math.round(f * 10))
+      return <Text color={f >= 1 ? C_OVER : f >= 0.8 ? C_WARN : C_ACCENT}>{'▰'.repeat(n) + '▱'.repeat(10 - n)}</Text>
+    }
 
     const steps = s.plan?.steps ?? []
     const agents = s.agents
     const shells = s.shells
     const files = topFiles(s, 15)
-    const log = s.toolLog.slice(-10)
+    const log = s.toolLog.slice(-10).reverse()
     const tasks = s.tasks.filter(t => t.status !== 'done')
     const hasFinished = agents.some(a => a.status !== 'running' && a.status !== 'idle') || shells.some(x => x.status !== 'running')
+    const pr = s.progress
+    const nameW = Math.max(10, width - 44)
+    // The header bar: one ━ segment per step (at most 12), lit up to the step reached.
+    const segs = pr ? Math.max(1, Math.min(12, pr.totalSteps)) : 0
+    const segW = pr ? Math.max(2, Math.floor((Math.min(48, inner - 4) - (segs - 1)) / segs)) : 0
+    const lit = pr ? (pr.done ? segs : Math.min(segs, (pr.step * segs) / Math.max(1, pr.totalSteps))) : 0
+    const barCells: { ch: string; color: string | undefined }[] = []
+    for (let i = 0; i < segs; i++) {
+      if (i > 0) barCells.push({ ch: ' ', color: undefined })
+      const n = Math.max(0, Math.min(1, lit - i))
+      for (let j = 0; j < segW; j++) {
+        const total = segs * segW
+        const t = total > 1 ? (i * segW + j) / (total - 1) : 0
+        const isLit = n >= 1 || j < Math.round(n * segW)
+        const g = [0xa5, 0xb4, 0xfc].map((v, k) => Math.round(v + ([0x0a, 0x84, 0xff][k]! - v) * t).toString(16).padStart(2, '0'))
+        barCells.push({ ch: '━', color: isLit ? '#' + g.join('') : C_DIM })
+      }
+    }
 
     return (
       <Box flexDirection="column">
-        <Box>
-          <Text bold>{s.progress ? cut(s.progress.task, width - 24) : 'No task'}</Text>
-          {s.progress ? <Text dimColor>{`  ${s.progress.step}/${s.progress.totalSteps}${s.progress.done ? ' · done' : ''}`}</Text> : null}
-          <Text dimColor>{`  · orchestrator ${s.orchestrate ? 'on' : 'off'}`}</Text>
-        </Box>
-        {web ? <Text dimColor>{cut('web: ' + web.url, width)}</Text> : null}
-
-        {s.cubes ? head('Cubes', `${s.cubes.cubes.filter(x => x.status === 'proposed').length} waiting · gate ${s.cubes.gate ? 'on' : 'off'}`) : null}
-        {s.cubes && s.cubes.cubes.some(x => x.status === 'proposed') ? (
+        <Box justifyContent="space-between" paddingX={1}>
           <Box>
-            <Button key="cubes-approve-all" label="Approve all" onPress={run({ action: 'cube.approveAll' })} />
+            <Text bold color={C_CUBE_RUN}>{'✦ '}</Text>
+            <Text bold>{pr ? cut(pr.task, width - 34) : 'No task'}</Text>
+          </Box>
+          <Text dimColor>{`${pr ? `${pr.step}/${pr.totalSteps}${pr.done ? ' · done' : ''}  ·  ` : ''}orchestrator ${s.orchestrate ? 'on' : 'off'}`}</Text>
+        </Box>
+        {pr ? (
+          <Box paddingX={1}>
+            {barCells.map((cl, i) => (
+              <Text key={`bar-${i}`} color={cl.color}>{cl.ch}</Text>
+            ))}
           </Box>
         ) : null}
-        {s.cubes ? (
-          <Box flexDirection="row" flexWrap="wrap">
-            {s.cubes.lanes.map((lane, li) => {
-              const laneW = Math.max(24, Math.floor(width / Math.max(1, Math.min(3, s.cubes!.lanes.length))) - 1)
-              return (
-                <Box key={`lane-${li}`} flexDirection="column" width={laneW} marginRight={1}>
-                  <Text dimColor>{li === 0 ? 'lane 1 · start' : `lane ${li + 1}`}</Text>
-                  {lane.map(id => {
-                    const cb = s.cubes!.cubes.find(x => x.id === id)
-                    if (!cb) return null
-                    const col = cubeColor(cb.status)
-                    const flow = cb.flow.length > 2 ? [...cb.flow.slice(0, 2), `… +${cb.flow.length - 2} more`] : cb.flow
-                    const isOpen = cb.status === 'proposed' || cb.status === 'failed' || cb.status === 'rejected' || cb.status === 'revising'
-                    const canChange = cb.status !== 'running' && cb.status !== 'done'
+        {web ? (
+          <Box paddingX={1}>
+            <Text dimColor>{cut('web: ' + web.url, inner)}</Text>
+          </Box>
+        ) : null}
+
+        {s.cubes
+          ? section(
+              '⬢',
+              'Cubes',
+              `${s.cubes.cubes.filter(x => x.status === 'proposed').length} waiting · gate ${s.cubes.gate ? 'on' : 'off'}`,
+              [
+                s.cubes.cubes.some(x => x.status === 'proposed') ? (
+                  <Box key="cubes-actions">
+                    <Button key="cubes-approve-all" label="Approve all" onPress={run({ action: 'cube.approveAll' })} />
+                  </Box>
+                ) : null,
+                <Box key="cubes-lanes" flexDirection="row" flexWrap="wrap">
+                  {s.cubes.lanes.map((lane, li) => {
+                    const laneW = Math.max(24, Math.floor(inner / Math.max(1, Math.min(3, s.cubes!.lanes.length))) - 1)
                     return (
-                      <Box key={`cube-${cb.id}`} flexDirection="column" borderStyle="round" borderColor={col} paddingX={1}>
-                        <Box>
-                          <Text bold color={col}>{cb.id + ' '}</Text>
-                          <Text>{cut(cb.title, Math.max(8, laneW - 18))}</Text>
-                          <Text dimColor>{`  ${cb.minutes}m`}</Text>
-                        </Box>
-                        <Text color={col}>{cb.status + (cb.after.length ? ' · after ' + cb.after.join(',') : '')}</Text>
-                        {flow.map((f, i) => (
-                          <Text key={`cube-${cb.id}-f${i}`} dimColor>{cut(i < 2 ? `${i + 1}. ${f}` : f, laneW - 4)}</Text>
-                        ))}
-                        {cb.note ? <Text color={C_WARN}>{cut('note: ' + cb.note, laneW - 4)}</Text> : null}
-                        {canChange ? (
-                          <Box>
-                            {isOpen ? <Button key={`cube-ok-${cb.id}`} label="Approve" onPress={run({ action: 'cube.approve', id: cb.id })} /> : null}
-                            <Button
-                              key={`cube-chg-${cb.id}`}
-                              label="Change"
-                              dimColor
-                              onPress={run({ action: 'cube.requestChange', id: cb.id, note: 'Changed from the pane — ask the user what to change' })}
-                            />
-                            {cb.status !== 'rejected' ? (
-                              <Button key={`cube-rej-${cb.id}`} label="Reject" dimColor onPress={run({ action: 'cube.reject', id: cb.id })} />
-                            ) : null}
-                          </Box>
-                        ) : null}
+                      <Box key={`lane-${li}`} flexDirection="column" width={laneW} marginRight={1}>
+                        <Text dimColor>{li === 0 ? 'lane 1 · start' : `lane ${li + 1}`}</Text>
+                        {lane.map(id => {
+                          const cb = s.cubes!.cubes.find(x => x.id === id)
+                          if (!cb) return null
+                          const col = cubeColor(cb.status)
+                          const flow = cb.flow.length > 2 ? [...cb.flow.slice(0, 2), `… +${cb.flow.length - 2} more`] : cb.flow
+                          const isOpen = cb.status === 'proposed' || cb.status === 'failed' || cb.status === 'rejected' || cb.status === 'revising'
+                          const canChange = cb.status !== 'running' && cb.status !== 'done'
+                          const g = cb.status === 'approved' || cb.status === 'queued' || cb.status === 'proposed' ? 'pending' : cb.status === 'rejected' ? 'failed' : cb.status
+                          return (
+                            <Box key={`cube-${cb.id}`} flexDirection="column" borderStyle="round" borderColor={col} paddingX={1}>
+                              <Box>
+                                <Text bold color={col}>{cb.id + ' '}</Text>
+                                <Text>{cut(cb.title, Math.max(8, laneW - 18))}</Text>
+                                <Text dimColor>{`  ${cb.minutes}m`}</Text>
+                              </Box>
+                              <Text color={col}>{`${glyphOf(g)} ${cb.status}${cb.after.length ? ' · after ' + cb.after.join(',') : ''}`}</Text>
+                              {flow.map((f, i) => (
+                                <Text key={`cube-${cb.id}-f${i}`} dimColor>{cut(i < 2 ? `${i + 1}. ${f}` : f, laneW - 4)}</Text>
+                              ))}
+                              {cb.note ? <Text color={C_WARN}>{cut('note: ' + cb.note, laneW - 4)}</Text> : null}
+                              {canChange ? (
+                                <Box>
+                                  {isOpen ? <Button key={`cube-ok-${cb.id}`} label="Approve" onPress={run({ action: 'cube.approve', id: cb.id })} /> : null}
+                                  <Button
+                                    key={`cube-chg-${cb.id}`}
+                                    label="Change"
+                                    dimColor
+                                    onPress={run({ action: 'cube.requestChange', id: cb.id, note: 'Changed from the pane — ask the user what to change' })}
+                                  />
+                                  {cb.status !== 'rejected' ? (
+                                    <Button key={`cube-rej-${cb.id}`} label="Reject" dimColor onPress={run({ action: 'cube.reject', id: cb.id })} />
+                                  ) : null}
+                                </Box>
+                              ) : null}
+                            </Box>
+                          )
+                        })}
                       </Box>
                     )
                   })}
+                </Box>,
+              ],
+              'sec-cubes',
+            )
+          : null}
+
+        {section(
+          '◆',
+          'Plan',
+          s.plan ? cut(s.plan.task, inner - 8) : 'none',
+          steps.map(st => {
+            const used = st.startedAt !== undefined ? ((st.endedAt ?? now) - st.startedAt) / 60000 : 0
+            const isOpen = st.status !== 'done' && st.status !== 'skipped'
+            return (
+              <Box key={`step-${st.k}`}>
+                <Text color={glyphColor(st.status)}>{`${glyphOf(st.status)} `}</Text>
+                <Text dimColor>{`${String(st.k).padStart(2)}. `}</Text>
+                <Text>{cut(st.title, Math.max(10, width - 30)).padEnd(Math.min(nameW, 40))}</Text>
+                <Text dimColor>{` ${used.toFixed(1)}/${st.minutes}m `}</Text>
+                {isOpen ? <Button key={`step-done-${st.k}`} label="done" dimColor onPress={run({ action: 'step.set', k: st.k, status: 'done' })} /> : null}
+                {isOpen ? <Button key={`step-skip-${st.k}`} label="skip" dimColor onPress={run({ action: 'step.set', k: st.k, status: 'skipped' })} /> : null}
+              </Box>
+            )
+          }),
+          'sec-plan',
+        )}
+
+        {section(
+          '◷',
+          'Executors',
+          `${agents.filter(a => a.status === 'running').length} running`,
+          [
+            agents.length === 0 ? none() : null,
+            ...agents.map(a => {
+              const usedMin = ((a.endedAt ?? now) - a.startedAt) / 60000
+              return (
+                <Box key={`agent-${a.id}`}>
+                  <Text color={glyphColor(a.status)}>{`${glyphOf(a.status)} `}</Text>
+                  <Text>{cut(a.description || a.type || a.id, nameW).padEnd(Math.min(nameW, 36))}</Text>
+                  <Text dimColor>{` ${a.step !== undefined ? 's' + a.step : '  '} `}</Text>
+                  {a.budgetMin ? miniBar(usedMin, a.budgetMin) : <Text dimColor>{'··········'}</Text>}
+                  <Text dimColor>{` ${ago((a.endedAt ?? now) - a.startedAt)}${a.budgetMin ? '/' + a.budgetMin + 'm' : ''} `}</Text>
+                  {a.status === 'running' || a.status === 'idle' ? (
+                    <Button key={`agent-stop-${a.id}`} label="stop" onPress={run({ action: 'agent.stop', id: a.id })} />
+                  ) : null}
                 </Box>
               )
-            })}
-          </Box>
-        ) : null}
+            }),
+          ],
+          'sec-agents',
+        )}
 
-        {head('Plan', s.plan ? cut(s.plan.task, width - 8) : 'none')}
-        {steps.map(st => {
-          const used = st.startedAt !== undefined ? ((st.endedAt ?? now) - st.startedAt) / 60000 : 0
-          const isOpen = st.status !== 'done' && st.status !== 'skipped'
-          return (
-            <Box key={`step-${st.k}`}>
-              <Text color={statusColor(st.status)}>{`${st.k}. ${st.status.padEnd(7)} `}</Text>
-              <Text>{cut(st.title, Math.max(10, width - 40))}</Text>
-              <Text dimColor>{`  ${used.toFixed(1)}/${st.minutes}m `}</Text>
-              {isOpen ? <Button key={`step-done-${st.k}`} label="done" dimColor onPress={run({ action: 'step.set', k: st.k, status: 'done' })} /> : null}
-              {isOpen ? <Button key={`step-skip-${st.k}`} label="skip" dimColor onPress={run({ action: 'step.set', k: st.k, status: 'skipped' })} /> : null}
-            </Box>
-          )
-        })}
+        {section(
+          '▣',
+          'Background shells',
+          undefined,
+          [
+            shells.length === 0 ? none() : null,
+            ...shells.map(x => (
+              <Box key={`shell-${x.id}`}>
+                <Text color={glyphColor(x.status)}>{`${glyphOf(x.status)} `}</Text>
+                <Text>{cut(x.description || x.command, Math.max(10, width - 30))}</Text>
+                <Text dimColor>{`  ${ago((x.endedAt ?? now) - x.startedAt)}${x.exitCode !== undefined ? ' · exit ' + x.exitCode : ''} `}</Text>
+                {x.status === 'running' ? <Button key={`shell-stop-${x.id}`} label="stop" onPress={run({ action: 'shell.stop', id: x.id })} /> : null}
+              </Box>
+            )),
+            hasFinished ? (
+              <Box key="clear-box">
+                <Button key="clear-finished" label="clear finished" dimColor onPress={run({ action: 'items.clearFinished' })} />
+              </Box>
+            ) : null,
+          ],
+          'sec-shells',
+        )}
 
-        {head('Agents', `${agents.filter(a => a.status === 'running').length} running`)}
-        {agents.length === 0 ? <Text dimColor>none</Text> : null}
-        {agents.map(a => (
-          <Box key={`agent-${a.id}`}>
-            <Text color={statusColor(a.status)}>{`${a.status.padEnd(7)} `}</Text>
-            <Text>{cut(a.description || a.type || a.id, Math.max(10, width - 36))}</Text>
-            <Text dimColor>{`  ${a.step !== undefined ? 'step ' + a.step + ' · ' : ''}${ago((a.endedAt ?? now) - a.startedAt)}${a.budgetMin ? '/' + a.budgetMin + 'm' : ''} `}</Text>
-            {a.status === 'running' || a.status === 'idle' ? (
-              <Button key={`agent-stop-${a.id}`} label="stop" onPress={run({ action: 'agent.stop', id: a.id })} />
-            ) : null}
-          </Box>
-        ))}
+        {section(
+          '✎',
+          'Files changed',
+          String(s.files.length),
+          [
+            files.length === 0 ? none() : null,
+            ...files.map(f => (
+              <Box key={`file-${f.path}`}>
+                <Text color={f.op === 'write' ? C_DONE : C_WARN}>{`${f.op === 'write' ? 'W' : 'E'} `}</Text>
+                <Text dimColor>{`×${String(f.count).padEnd(3)} `}</Text>
+                <Text>{cut(f.path, inner - 8)}</Text>
+              </Box>
+            )),
+          ],
+          'sec-files',
+        )}
 
-        {head('Background shells')}
-        {shells.length === 0 ? <Text dimColor>none</Text> : null}
-        {shells.map(x => (
-          <Box key={`shell-${x.id}`}>
-            <Text color={statusColor(x.status)}>{`${x.status.padEnd(7)} `}</Text>
-            <Text>{cut(x.description || x.command, Math.max(10, width - 30))}</Text>
-            <Text dimColor>{`  ${ago((x.endedAt ?? now) - x.startedAt)}${x.exitCode !== undefined ? ' · exit ' + x.exitCode : ''} `}</Text>
-            {x.status === 'running' ? <Button key={`shell-stop-${x.id}`} label="stop" onPress={run({ action: 'shell.stop', id: x.id })} /> : null}
-          </Box>
-        ))}
-        {hasFinished ? (
-          <Box>
-            <Button key="clear-finished" label="clear finished" dimColor onPress={run({ action: 'items.clearFinished' })} />
-          </Box>
-        ) : null}
+        {section(
+          '▤',
+          'Tools',
+          `last ${log.length}, newest first`,
+          log.map((t, i) => {
+            const name = t.tool.replace(/^mcp__[^_]+__/, '')
+            return (
+              <Box key={`log-${i}`}>
+                <Text dimColor>{`${ago(now - t.at).padStart(4)} `}</Text>
+                <Text color={t.ok ? C_CUBE_RUN : C_OVER}>{`${t.ok ? '·' : '✗'} ${cut(name, 14).padEnd(14)}`}</Text>
+                <Text dimColor>{cut(` ${t.summary}${t.agentId ? ' [' + t.agentId.slice(0, 6) + ']' : ''}`, Math.max(10, inner - 24))}</Text>
+              </Box>
+            )
+          }),
+          'sec-tools',
+        )}
 
-        {head('Files changed', String(s.files.length))}
-        {files.length === 0 ? <Text dimColor>none</Text> : null}
-        {files.map(f => (
-          <Box key={`file-${f.path}`}>
-            <Text dimColor>{`${f.op === 'write' ? 'W' : 'E'} ×${String(f.count).padEnd(3)} `}</Text>
-            <Text>{cut(f.path, width - 10)}</Text>
-          </Box>
-        ))}
-
-        {head('Tool log', `last ${log.length}`)}
-        {log.map((t, i) => (
-          <Box key={`log-${i}`}>
-            <Text color={t.ok ? C_DIM : C_OVER}>{`${ago(now - t.at).padStart(4)} `}</Text>
-            <Text>{t.tool.replace(/^mcp__[^_]+__/, '')}</Text>
-            <Text dimColor>{cut(` ${t.summary}${t.agentId ? ' [' + t.agentId.slice(0, 6) + ']' : ''}`, Math.max(10, width - 24))}</Text>
-          </Box>
-        ))}
-
-        {head('Tasks', `${tasks.length} open`)}
-        {tasks.length === 0 ? <Text dimColor>none (add them in the web app: /tp-dashboard web)</Text> : null}
-        {tasks.map(t => (
-          <Box key={`task-${t.id}`}>
-            <Text color={t.priority === 'high' ? C_OVER : t.priority === 'low' ? C_DIM : C_WARN}>{`${t.priority.padEnd(4)} `}</Text>
-            <Text color={statusColor(t.status)}>{`${t.status.padEnd(7)} `}</Text>
-            <Text>{cut(t.title, Math.max(10, width - 34))} </Text>
-            <Button key={`task-done-${t.id}`} label="done" dimColor onPress={run({ action: 'task.update', id: t.id, status: 'done' })} />
-            <Button key={`task-send-${t.id}`} label="send" onPress={run({ action: 'task.send', id: t.id })} />
-          </Box>
-        ))}
+        {section(
+          '▦',
+          'Tasks',
+          `${tasks.length} open`,
+          [
+            tasks.length === 0 ? none('none (add them in the web app: /tp-dashboard web)') : null,
+            ...tasks.map(t => (
+              <Box key={`task-${t.id}`}>
+                <Text color={glyphColor(t.status)}>{`${glyphOf(t.status)} `}</Text>
+                <Text color={t.priority === 'high' ? C_OVER : t.priority === 'low' ? C_DIM : C_WARN}>{`${t.priority.padEnd(4)} `}</Text>
+                <Text>{cut(t.title, Math.max(10, width - 34))} </Text>
+                <Button key={`task-done-${t.id}`} label="done" dimColor onPress={run({ action: 'task.update', id: t.id, status: 'done' })} />
+                <Button key={`task-send-${t.id}`} label="send" onPress={run({ action: 'task.send', id: t.id })} />
+              </Box>
+            )),
+          ],
+          'sec-tasks',
+        )}
       </Box>
     )
   })
