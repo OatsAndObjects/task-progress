@@ -36,7 +36,9 @@ import {
   type CommandDeps,
 } from './dashboard-model'
 import { seedHistory } from './dash-mirror'
+import { newOpenState, openOnce, type OpenDeps } from './dash-open'
 import { answerPerm } from './dash-perm'
+import { loadTickets, ticketCommand } from './dash-tickets'
 import { filesDeps,runFileCommand } from './dash-files'
 import { onSessionTurnComplete, runSessionCommand, sessionState } from './dash-session'
 import { answerCube, applyReview, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviseCube, withBoard } from './cubes-model'
@@ -122,6 +124,7 @@ export const webTarget = (): { port: number; token: string } | null => (c.web ? 
 /** Set by register.tsx: runs once each time the web server becomes ready. */
 export const webReady: { fn?: ($: any) => void } = {}
 
+let ticketCounter = 0
 const c: DashCtx = { snap: null, flushTimer: undefined, poll: undefined, web: null, starting: null }
 
 async function load($: any): Promise<Snapshot> {
@@ -259,24 +262,80 @@ async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandR
     if (fr) return fr
   }
   await load($)
+  if (typeof cmd.action === 'string' && cmd.action.startsWith('ticket.')) {
+    const tickNow: number = await $.clock.now()
+    const tr = await ticketCommand(cmd, {
+      now: () => tickNow,
+      get: () => c.snap!,
+      put: s => put($, s),
+      counter: () => ticketCounter,
+      save: async st => {
+        ticketCounter = st.counter
+        await $.store.set('tickets', st)
+      },
+      submit: async (text: string) => {
+        const out: any = await $.prompt.submit({ text, asUser: true })
+        if (out && typeof out.deny === 'string') throw new Error(out.deny)
+      },
+    })
+    if (tr) return tr
+  }
   return runCommand(cmd, deps($, await $.clock.now()))
 }
 
 // ---- web bridge -------------------------------------------------------
 
+const openState = newOpenState()
+
+async function openDeps($: any): Promise<OpenDeps> {
+  const osName = String((await $.env.get('OS')) ?? '')
+  const isWin = osName === 'Windows_NT'
+  let os: OpenDeps['os'] = isWin ? 'windows' : 'linux'
+  if (!isWin) {
+    try {
+      const r = await $.process.run(['uname'])
+      if (String(r.stdout).trim() === 'Darwin') os = 'mac'
+    } catch {
+      // keep linux
+    }
+  }
+  return {
+    os,
+    programFiles: String((await $.env.get('ProgramFiles')) ?? ''),
+    programFilesX86: String((await $.env.get('ProgramFiles(x86)')) ?? ''),
+    localAppData: String((await $.env.get('LOCALAPPDATA')) ?? ''),
+    exists: async (p: string) => {
+      try {
+        return Boolean(await $.fs.exists(p))
+      } catch {
+        return false
+      }
+    },
+    run: async (argv: string[]) => {
+      const r = await $.process.run(argv, { cwd: String((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '') || undefined })
+      return { exitCode: Number(r.exitCode), stdout: String(r.stdout ?? '') }
+    },
+  }
+}
+
 async function openBrowser($: any, url: string) {
   try {
-    if ((await $.env.get('OS')) === 'Windows_NT') {
-      await $.process.run(['cmd', '/c', 'start', '', url])
-      return
-    }
-    try {
-      await $.process.run(['open', url])
-    } catch {
-      await $.process.run(['xdg-open', url])
-    }
+    await openOnce({ opened: false }, await openDeps($), url)
   } catch {
     // the URL is printed either way
+  }
+}
+
+// Session start: the web dashboard starts with Claude Code and opens once per session.
+async function autoStartWeb($: any) {
+  try {
+    if ((await $.store.get('autoOpen')) === false) return
+    if (c.web || c.starting || openState.opened) return
+    const w = await startWeb($)
+    if (!w) return
+    await openOnce(openState, await openDeps($), w.url)
+  } catch {
+    // best effort
   }
 }
 
@@ -401,9 +460,18 @@ export async function onSessionStart($: any, e: any) {
     // nothing stored
   }
   c.snap = emptySnapshot({ id, cwd: String(e.cwd ?? ''), startedAt: now }, await isOrchestrateOn($), tasks)
+  try {
+    const lt = loadTickets(await $.store.get('tickets'), tasks)
+    ticketCounter = lt.store.counter
+    c.snap = { ...c.snap, tickets: lt.store.list }
+    if (lt.migrated) await $.store.set('tickets', lt.store)
+  } catch {
+    // tickets are optional; the board shows empty
+  }
   await $.state.set(snapRef, c.snap)
   await $.state.set(webRef, c.web ? { port: c.web.port, url: c.web.url } : null)
   syncPoll($)
+  void autoStartWeb($)
   try {
     const u = await $.session.usage()
     await mutate($, s => setMeasure(s, u, now))
@@ -537,10 +605,14 @@ export function registerDashboard(on: any): void {
       void openBrowser($, w.url)
       return { text: `Dashboard web: ${w.url}` }
     }
+    if (arg === 'auto on' || arg === 'auto off') {
+      await $.store.set('autoOpen', arg === 'auto on')
+      return { text: `Dashboard auto-start ${arg === 'auto on' ? 'on' : 'off'}.` }
+    }
     if (arg === 'web stop') {
       return { text: (await stopWeb($)) ? 'Dashboard web server stopped.' : 'Dashboard web server is not running.' }
     }
-    return { text: 'Usage: /tp-dashboard  ·  /tp-dashboard web  ·  /tp-dashboard web stop  ·  /tp-dashboard close' }
+    return { text: 'Usage: /tp-dashboard  ·  /tp-dashboard web  ·  /tp-dashboard web stop  ·  /tp-dashboard auto on|off  ·  /tp-dashboard close' }
   })
 
   // ---- the pane -------------------------------------------------------------
