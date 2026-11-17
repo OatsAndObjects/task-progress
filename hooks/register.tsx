@@ -18,7 +18,9 @@ import {
   onToolCall,
   onTurnComplete,
   registerDashboard,
+  webTarget,
 } from './dashboard'
+import { mirrorToolStart, mirrorTurnEnd, registerMirror } from './dash-mirror'
 import { parseBudget } from './dashboard-model'
 import { buildBoard, gateCheck, topoOrder } from './cubes-model'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
@@ -482,6 +484,7 @@ export const register: Register = on => {
   const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [], composeSeen: false, rulesSent: false }
   // The session dashboard: /tp-dashboard and its pane. Its collectors ride on the hooks below.
   registerDashboard(on)
+  registerMirror(on, webTarget)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -847,6 +850,7 @@ export const register: Register = on => {
       }
     }
     await quiet(onTurnComplete($, e))
+    mirrorTurnEnd($, e)
     return next(e)
   })
 
@@ -858,6 +862,7 @@ export const register: Register = on => {
   // The enforcement hook: input gate and dispatch budget for the main session, time
   // budget for sub-agents. Plugin tools answer in their own hooks above.
   on('tool.call', async ($, e, next) => {
+    const mirrorDone = mirrorToolStart($, e)
     const d = await gateDecision($, e, next.origin?.plugin === PLUGIN, c)
     let out: any
     if (d.deny !== undefined) {
@@ -866,6 +871,7 @@ export const register: Register = on => {
       out = await next(e)
       if (d.notice && out.deny === undefined) out = { ...out, context: [...(out.context ?? []), d.notice] }
     }
+    mirrorDone(out)
     await quiet(onToolCall($, e, out))
     return out
   })
