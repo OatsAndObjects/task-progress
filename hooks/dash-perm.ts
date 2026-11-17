@@ -97,12 +97,17 @@ export async function askWebPermission(tool: string, input: unknown, d: PermDeps
       }
     })
     const ex = d.extra ?? {}
-    await d.postEvent({
+    const posted: any = await d.postEvent({
       type: 'permission', id, tool, summary: toolSummary(tool, inp), input: capInput(inp),
       ...(ex.agent ? { agent: clip(ex.agent, 120) } : {}),
       ...(ex.reason ? { reason: clip(ex.reason, 300) } : {}),
       ...(ex.askedBy ? { askedBy: clip(ex.askedBy, 120) } : {}),
     })
+    if (posted && posted.ok === false) {
+      // The page never got the card: do not make the terminal wait for an answer that cannot come.
+      waiting.delete(id)
+      return { decision: 'ask' }
+    }
     const r = await answered
     waiting.delete(id)
     try {

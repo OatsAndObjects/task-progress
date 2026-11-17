@@ -86,3 +86,64 @@ test('a failing POST is swallowed and later posts still go', async () => {
   await off.fire()
   expect(off.sent.length).toBe(0)
 })
+
+test('a turn that ends on a tool call does not repeat earlier text as a final assistant', async () => {
+  const r = rig()
+  r.m.turnStart('go')
+  r.m.chunk('let me look')
+  r.m.toolStart({ tool: 'Read', tool_use_id: 'a', file_path: '/x' })
+  r.m.turnEnd({ answer: 'let me look' })
+  await r.fire()
+  expect(r.types().filter(t => t === 'assistant')).toEqual([])
+  // nothing streamed at all: the answer is the fallback
+  const q = rig()
+  q.m.turnStart('go')
+  q.m.turnEnd({ answer: 'only answer' })
+  await q.fire()
+  expect(q.sent.flat().filter(e => e.type === 'assistant')).toEqual([{ type: 'assistant', text: 'only answer' }])
+})
+
+test('the post queue is capped at 50 batches (oldest dropped, order kept) when the server hangs', async () => {
+  const sent: string[] = []
+  let release: () => void = () => undefined
+  const gate = new Promise<void>(res => (release = res))
+  const m = createMirror({
+    isOn: () => true,
+    after: () => ({ cancel: () => undefined }),
+    send: async evs => {
+      await gate
+      sent.push(String(evs[0].text))
+    },
+  })
+  for (let i = 0; i < 200; i++) m.post({ type: 'user', text: `m${i}` })
+  release()
+  await new Promise(r => setTimeout(r, 20))
+  expect(sent.length).toBe(51) // the one in flight + the newest 50
+  expect(sent[0]).toBe('m0')
+  expect(sent.slice(1)).toEqual(Array.from({ length: 50 }, (_, i) => `m${150 + i}`))
+})
+
+test('a send that never settles is given up on after the timeout so later posts go', async () => {
+  const sent: string[] = []
+  const fires: (() => void)[] = []
+  const m = createMirror({
+    isOn: () => true,
+    after: () => ({ cancel: () => undefined }),
+    timeout: () => new Promise<void>(res => fires.push(res)),
+    send: evs => (evs[0].text === 'hang' ? new Promise(() => undefined) : (sent.push(String(evs[0].text)), undefined)),
+  })
+  m.post({ type: 'user', text: 'hang' })
+  m.post({ type: 'user', text: 'next' })
+  await new Promise(r => setTimeout(r, 0))
+  expect(sent).toEqual([])
+  fires[0]()
+  await new Promise(r => setTimeout(r, 0))
+  expect(sent).toEqual(['next'])
+})
+
+test('seeding starts with history.reset so a restarted page clears first', async () => {
+  const r = rig()
+  r.m.seed([{ role: 'user', text: 'hi', toolUses: [] }])
+  await r.fire()
+  expect(r.sent.flat().map(e => e.type)).toEqual(['history.reset', 'user'])
+})

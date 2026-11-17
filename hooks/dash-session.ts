@@ -17,6 +17,8 @@ export type SessionDeps = {
 /** The main loop's running turn id, cached at turn.start and cleared at its turn.complete. */
 export type SessionState = { turnId: string | null }
 
+const STALE_TURN_RE = /not running|no such turn|no running turn|mismatch|unknown turn|not found|no active turn|already (ended|finished|complete)/i
+
 export const newSessionState = (): SessionState => ({ turnId: null })
 
 /** turn.start: only the main loop (no agentId) counts. */
@@ -40,9 +42,10 @@ export async function sessionPrompt(s: SessionState, d: SessionDeps, text: unkno
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }
   try {
-    await d.postEvent({ type: 'prompt.state', state, text })
+    // fire-and-forget: the event is a nicety and must not delay the reply
+    void Promise.resolve(d.postEvent({ type: 'prompt.state', state, text })).catch(() => undefined)
   } catch {
-    // the event is a nicety
+    // never throws into the command
   }
   return { ok: true, message: state === 'queued' ? 'queued behind the running turn' : 'sent', data: { state } }
 }
@@ -53,7 +56,10 @@ export async function stopTurn(s: SessionState, d: SessionDeps): Promise<Dashboa
   try {
     await d.abort(id)
   } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    const message = err instanceof Error ? err.message : String(err)
+    // The turn is already over (or the id is stale): forget it so the next Stop says "Nothing is running".
+    if (STALE_TURN_RE.test(message) && s.turnId === id) s.turnId = null
+    return { ok: false, message }
   }
   if (s.turnId === id) s.turnId = null
   return { ok: true, message: 'stopped' }

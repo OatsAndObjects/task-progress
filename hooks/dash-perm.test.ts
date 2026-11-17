@@ -125,3 +125,10 @@ test('input is truncated', () => {
   for (let i = 0; i < 40; i++) big['k' + i] = 'z'.repeat(400)
   expect(JSON.stringify(capInput(big)).length).toBeLessThanOrEqual(4096)
 })
+
+test('a failed post (ok:false) asks immediately instead of waiting', async () => {
+  const f = fake()
+  const d = { ...f.deps, postEvent: async () => ({ ok: false }) }
+  expect((await askWebPermission('Bash', { command: 'ls' }, d)).decision).toBe('ask')
+  expect(pendingCount()).toBe(0)
+})

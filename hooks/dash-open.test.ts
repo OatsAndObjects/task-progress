@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { newOpenState, openOnce, pickBrowser, type OpenDeps } from './dash-open'
+import { newOpenState, openBrowser, openOnce, pickBrowser, type OpenDeps } from './dash-open'
 
 const PF = 'C:\\Program Files'
 const PF86 = 'C:\\Program Files (x86)'
@@ -15,7 +15,7 @@ function deps(present: string[], extra: Partial<OpenDeps> = {}): OpenDeps & { ra
     exists: async p => present.includes(p),
     run: async argv => {
       ran.push(argv)
-      return { exitCode: 1, stdout: '' }
+      return { exitCode: 0, stdout: '' }
     },
     ...extra,
   }
@@ -51,6 +51,32 @@ test('default browser when both are missing', async () => {
 test('mac order', async () => {
   const d = deps(['/Applications/Microsoft Edge.app'], { os: 'mac' })
   expect((await pickBrowser(d, 'u')).browser).toBe('edge')
+})
+
+test('an exe path with cmd metacharacters is skipped for the next browser', async () => {
+  for (const ch of ['&', '^', '%', '"', '<', '>', '|']) {
+    const dir = `C:\\x${ch}y`
+    const p = `${dir}\\Google\\Chrome\\Application\\chrome.exe`
+    const pick = await pickBrowser(deps([p, EDGE], { programFiles: dir }), 'u')
+    expect(pick.browser).toBe('edge')
+    expect(pick.argv.includes(p)).toBe(false)
+  }
+})
+
+test('a launch that exits non-zero or throws falls to the next browser', async () => {
+  const ran: string[][] = []
+  const d = deps([CHROME, EDGE], {
+    run: async argv => {
+      ran.push(argv)
+      if (argv.includes(CHROME)) return { exitCode: 1, stdout: '' }
+      if (argv.includes(EDGE)) throw new Error('boom')
+      return { exitCode: 0, stdout: '' }
+    },
+  })
+  expect(await openBrowser(d, 'u')).toBe('default')
+  expect(ran.length).toBe(3)
+  const allBad = deps([CHROME], { run: async () => ({ exitCode: 1, stdout: '' }) })
+  expect(await openBrowser(allBad, 'u')).toBe('failed')
 })
 
 test('only one open per session', async () => {

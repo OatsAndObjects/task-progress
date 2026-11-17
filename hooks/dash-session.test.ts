@@ -78,3 +78,25 @@ test('stop with no turn is not ok, and a stale id after complete is not aborted'
 test('non-session actions fall through', async () => {
   expect(await runSessionCommand({ action: 'cube.approve' }, fake(), newSessionState())).toBeNull()
 })
+
+test('stop clears the cached turn id when abort says the turn is not running', async () => {
+  const s = newSessionState()
+  onSessionTurnStart(s, { turnId: 't9' })
+  const d = { ...fake(), abort: async () => { throw new Error('turn t9 is not running') } }
+  expect((await stopTurn(s, d)).ok).toBe(false)
+  expect(s.turnId).toBeNull()
+  // an unrelated failure keeps the id so Stop can be retried
+  onSessionTurnStart(s, { turnId: 't10' })
+  const e = { ...fake(), abort: async () => { throw new Error('network down') } }
+  expect((await stopTurn(s, e)).ok).toBe(false)
+  expect(s.turnId).toBe('t10')
+})
+
+test('session.prompt does not wait for the prompt.state event', async () => {
+  const s = newSessionState()
+  const d = { ...fake(), postEvent: () => new Promise<void>(() => undefined) }
+  const r = await Promise.race([runSessionCommand({ action: 'session.prompt', text: 'go' }, d, s), new Promise(res => setTimeout(() => res('hung'), 200))])
+  expect((r as any).ok).toBe(true)
+  const t = { ...fake(), postEvent: async () => { throw new Error('x') } }
+  expect((await runSessionCommand({ action: 'session.prompt', text: 'go' }, t, s))?.ok).toBe(true)
+})

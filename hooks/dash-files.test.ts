@@ -1,9 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
-import { FILE_CAP, capText, editorArgv, fileDiff, fileOpen, fileRead, resolveInCwd } from './dash-files'
+import { FILE_CAP, capText, editorArgv, fileDiff, fileOpen, fileRead, resolveExe, resolveInCwd } from './dash-files'
 import type { FileDeps } from './dash-files'
 
 const b64 = (s: string) => btoa(s)
+const CODE = 'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd'
+const GIT = 'C:\\Program Files\\Git\\cmd\\git.exe'
+const WHERE_OUT: Record<string, string> = { code: `${CODE}\r\n`, git: `${GIT}\r\n`, studio64: 'C:\\tools\\studio64.exe\r\n' }
 
 function deps(over: Partial<FileDeps> = {}, files: Record<string, string> = {}, links: Record<string, string> = {}): any {
   const calls: string[][] = []
@@ -21,6 +24,7 @@ function deps(over: Partial<FileDeps> = {}, files: Record<string, string> = {}, 
     readBytes: async (p: string) => b64(files[p]),
     exists: async () => false,
     run: async (argv: string[], init?: any) => {
+      if (argv[0].endsWith('where.exe')) return { exitCode: 0, stdout: WHERE_OUT[argv[1]] ?? '', stderr: '' }
       calls.push(argv)
       cwds.push(init?.cwd)
       return { exitCode: 0, stdout: '', stderr: '' }
@@ -69,9 +73,11 @@ test('file.diff diffs tracked files and shows untracked ones as added', async ()
   const seen: string[][] = []
   const d = deps(
     {
-      run: async (argv: string[]) => {
+      run: async (argv: string[], init?: any) => {
+        if (argv[0].endsWith('where.exe')) return { exitCode: 0, stdout: GIT, stderr: '' }
         seen.push(argv)
-        if (argv[1] === 'ls-files') return { exitCode: 1, stdout: '', stderr: '' }
+        expect(init.cwd).toBe('C:\\Users\\u') // never the project
+        if (argv[3] === 'ls-files') return { exitCode: 1, stdout: '', stderr: '' }
         return { exitCode: 1, stdout: 'DIFF', stderr: '' }
       },
     },
@@ -80,7 +86,7 @@ test('file.diff diffs tracked files and shows untracked ones as added', async ()
   const r = await fileDiff(d, 't.txt')
   expect(r.ok).toBe(true)
   expect((r.data as any).diff).toBe('DIFF')
-  expect(seen[1]).toEqual(['git', 'diff', '--no-index', '--', '/dev/null', 't.txt'])
+  expect(seen[1]).toEqual([GIT, '-C', 'C:\\proj\\app', 'diff', '--no-index', '--', '/dev/null', 't.txt'])
   expect((await fileDiff(d, '../x')).ok).toBe(false)
 })
 
@@ -99,10 +105,65 @@ test('file.open validates, confines, and spawns the editor', async () => {
   expect(d.calls.length).toBe(0)
   const r = await fileOpen(d, 'a.ts', 'vscode', 3)
   expect(r.ok).toBe(true)
-  expect(d.calls[0]).toEqual(['code', '-g', 'C:\\proj\\app\\a.ts:3'])
+  expect(d.calls[0]).toEqual([CODE, '-g', 'C:\\proj\\app\\a.ts:3'])
   const s = deps({ exists: async (p: string) => p.endsWith('studio64.exe') }, { 'C:/proj/app/a.ts': 'x' })
   expect((await fileOpen(s, 'a.ts', 'studio', 9)).ok).toBe(true)
   expect(s.calls[0]).toEqual(['C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe', '--line', '9', 'C:\\proj\\app\\a.ts'])
+})
+
+test('bare editor names resolve through where.exe from the neutral dir; project-dir and relative results are refused', async () => {
+  const whereCalls: { argv: string[]; cwd?: string }[] = []
+  const mk = (out: string, cache?: Map<string, string | null>) =>
+    deps(
+      {
+        exeCache: cache,
+        run: async (argv: string[], init?: any) => {
+          if (argv[0] === 'C:\\Windows\\System32\\where.exe') {
+            whereCalls.push({ argv, cwd: init?.cwd })
+            return { exitCode: 0, stdout: out, stderr: '' }
+          }
+          return { exitCode: 0, stdout: '', stderr: '' }
+        },
+      },
+      { 'C:/proj/app/a.ts': 'x' },
+    )
+  // a planted copy inside the project (any case) and a relative hit are skipped; the next absolute one wins
+  expect(await resolveExe(mk('C:\\PROJ\\app\\code.exe\r\ncode.cmd\r\n.\\code.bat\r\nC:\\real\\code.exe\r\n'), 'code')).toBe('C:\\real\\code.exe')
+  expect(whereCalls[0]).toEqual({ argv: ['C:\\Windows\\System32\\where.exe', 'code'], cwd: 'C:\\Users\\u' })
+  expect(await resolveExe(mk('C:\\proj\\app\\sub\\code.exe\r\n'), 'code')).toBeNull()
+  expect(await resolveExe(mk('code.exe\r\n'), 'code')).toBeNull()
+  // nothing resolvable -> nothing is launched
+  const bad = mk('C:\\proj\\app\\code.exe\r\n')
+  const launched: string[][] = []
+  const run = bad.run
+  bad.run = async (argv: string[], init?: any) => {
+    if (!argv[0].endsWith('where.exe')) launched.push(argv)
+    return run(argv, init)
+  }
+  expect((await fileOpen(bad, 'a.ts', 'vscode', 1)).ok).toBe(false)
+  expect(launched).toEqual([])
+  // cached per session
+  const cache = new Map<string, string | null>()
+  const n = whereCalls.length
+  const c = mk('C:\\real\\code.exe\r\n', cache)
+  await resolveExe(c, 'code')
+  await resolveExe(c, 'code')
+  expect(whereCalls.length).toBe(n + 1)
+})
+
+test('non-windows bare names use command -v through /bin/sh from the neutral dir', async () => {
+  const seen: { argv: string[]; cwd?: string }[] = []
+  const d = deps({
+    isWindows: false,
+    cwd: '/home/u/proj',
+    env: { neutralDir: '/tmp' },
+    run: async (argv: string[], init?: any) => {
+      seen.push({ argv, cwd: init?.cwd })
+      return { exitCode: 0, stdout: '/home/u/proj/bin/code\n/usr/bin/code\n', stderr: '' }
+    },
+  })
+  expect(await resolveExe(d, 'code')).toBe('/usr/bin/code')
+  expect(seen[0]).toEqual({ argv: ['/bin/sh', '-c', 'command -v "$0"', 'code'], cwd: '/tmp' })
 })
 
 test('editors launch from a neutral directory, never the project', async () => {

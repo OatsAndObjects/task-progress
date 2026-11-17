@@ -16,6 +16,8 @@ export type FileDeps = {
   exists: (path: string) => Promise<boolean>
   run: (argv: string[], init?: { cwd?: string; timeoutMs?: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
   sleep: (ms: number) => Promise<void>
+  /** Bare name -> resolved absolute path (or null), kept per session. */
+  exeCache?: Map<string, string | null>
 }
 
 const fail = (message: string): FileResult => ({ ok: false, message })
@@ -113,10 +115,46 @@ export async function fileRead(d: FileDeps, input: unknown): Promise<FileResult>
   }
 }
 
+const WHERE = 'C:\\Windows\\System32\\where.exe'
+
+/**
+ * A bare command name as an absolute path, resolved from the neutral directory (never the project),
+ * or null. Anything relative, or inside the project directory (case-insensitive), is refused so a
+ * planted executable in the repo can never be launched.
+ */
+export async function resolveExe(d: FileDeps, name: string): Promise<string | null> {
+  const cached = d.exeCache?.get(name)
+  if (cached !== undefined) return cached
+  let found: string | null = null
+  try {
+    const argv = d.isWindows ? [WHERE, name] : ['/bin/sh', '-c', 'command -v "$0"', name]
+    const r = await d.run(argv, { cwd: d.env.neutralDir, timeoutMs: 10000 })
+    if (r.exitCode === 0) {
+      const proj = trimEnd(slash(d.cwd))
+      for (const line of r.stdout.split(/\r?\n/)) {
+        const p = line.trim()
+        if (!p || p.includes('\0')) continue
+        const abs = d.isWindows ? /^[A-Za-z]:[\\/]/.test(p) : p.startsWith('/')
+        if (!abs) continue
+        if (inside(slash(p), proj, d.isWindows)) continue
+        found = p
+        break
+      }
+    }
+  } catch {
+    found = null
+  }
+  d.exeCache?.set(name, found)
+  return found
+}
+
 export async function fileDiff(d: FileDeps, input: unknown): Promise<FileResult> {
   const r = await resolveInCwd(d, input)
   if ('error' in r) return fail(r.error)
-  const git = (args: string[]) => d.run(['git', ...args], { cwd: d.cwd, timeoutMs: 15000 })
+  // git runs from the neutral directory (a repo-planted git.exe must not win), pointed at the project with -C.
+  const gitExe = await resolveExe(d, 'git')
+  if (!gitExe) return fail('git not found')
+  const git = (args: string[]) => d.run([gitExe, '-C', d.cwd, ...args], { cwd: d.env.neutralDir, timeoutMs: 15000 })
   try {
     const tracked = await git(['ls-files', '--error-unmatch', '--', r.rel])
     let out: { exitCode: number; stdout: string; stderr: string }
@@ -165,7 +203,12 @@ export async function fileOpen(d: FileDeps, input: unknown, editor: unknown, lin
   if ('error' in r) return fail(r.error)
   const abs = d.isWindows ? r.abs.replace(/\//g, '\\') : r.abs
   let lastErr = ''
-  for (const exe of await editorExecutables(d, editor)) {
+  for (const cand of await editorExecutables(d, editor)) {
+    const exe = /[\\/]/.test(cand) ? cand : await resolveExe(d, cand)
+    if (!exe) {
+      lastErr = `${cand} not found`
+      continue
+    }
     const argv = editorArgv(editor, exe, abs, n)
     // The launcher may keep running with the editor; success is "started and did not fail fast".
     // cwd is never the project dir: bare names resolve against cwd first on Windows
@@ -193,6 +236,8 @@ export async function runFileCommand(cmd: Record<string, unknown>, d: FileDeps):
   }
 }
 
+const exeCache = new Map<string, string | null>()
+
 /** The real deps, from the engine's `$`. */
 export async function filesDeps($: any): Promise<FileDeps> {
   // $.env.get needs a literal name, so every variable is read by its own call.
@@ -212,5 +257,6 @@ export async function filesDeps($: any): Promise<FileDeps> {
     exists: (p: string) => $.fs.exists(p),
     run: (argv: string[], init?: any) => $.process.run(argv, init),
     sleep: (ms: number) => $.clock.sleep(ms),
+    exeCache,
   }
 }

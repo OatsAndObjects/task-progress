@@ -235,6 +235,8 @@ declare module 'claude-code' {
       snapshot: Snapshot | null
       /** The dashboard web server while it runs. */
       web: DashboardWeb | null
+      /** Once-per-session marks for the web dashboard (browser opened). */
+      webMarks: { sessionId: string; opened: boolean } | null
       /** Approval gate for new cube boards; unset means on. */
       cubesGate: 'on' | 'off'
     }

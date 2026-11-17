@@ -9,6 +9,8 @@ export const HISTORY_MAX = 300
 export const OUTPUT_MAX = 4096
 export const SUMMARY_MAX = 200
 const POST_MAX = 500
+export const QUEUE_MAX = 50
+export const SEND_TIMEOUT_MS = 5000
 
 export type MirrorEvent = { type: string; [k: string]: unknown }
 export type WebTarget = { port: number; token: string }
@@ -72,10 +74,14 @@ export type MirrorDeps = {
   /** True when a web server is running; with none, nothing is queued. */
   isOn: () => boolean
   after: (ms: number, fn: () => void) => { cancel: () => void }
+  /** Resolves after ms; a send that outlasts SEND_TIMEOUT_MS is given up on (the request itself cannot be cancelled). */
+  timeout?: (ms: number) => Promise<void>
 }
 
 export function createMirror(d: MirrorDeps) {
-  let queue: Promise<unknown> = Promise.resolve()
+  const pending: MirrorEvent[][] = []
+  let draining = false
+  let streamed = false // any text streamed this turn
   let buf = ''
   let seg = '' // text streamed since the last break, for the final `assistant` event
   let timer: { cancel: () => void } | undefined
@@ -88,10 +94,30 @@ export function createMirror(d: MirrorDeps) {
       const all = Array.isArray(ev) ? ev : [ev]
       for (let i = 0; i < all.length; i += POST_MAX) {
         const part = all.slice(i, i + POST_MAX)
-        queue = queue.then(() => d.send(part)).catch(() => undefined)
+        pending.push(part)
+        while (pending.length > QUEUE_MAX) pending.shift() // a hung server must not grow memory
       }
+      void drain()
     } catch {
       // never break a turn
+    }
+  }
+  const drain = async () => {
+    if (draining) return
+    draining = true
+    try {
+      while (pending.length) {
+        const part = pending.shift()!
+        try {
+          const sent = Promise.resolve(d.send(part))
+          sent.catch(() => undefined)
+          await (d.timeout ? Promise.race([sent, d.timeout(SEND_TIMEOUT_MS)]) : sent)
+        } catch {
+          // dropped
+        }
+      }
+    } finally {
+      draining = false
     }
   }
   const flush = () => {
@@ -106,6 +132,7 @@ export function createMirror(d: MirrorDeps) {
     if (!text) return
     buf += text
     seg += text
+    streamed = true
     if (!timer) {
       try {
         timer = d.after(CHUNK_MS, () => {
@@ -128,18 +155,22 @@ export function createMirror(d: MirrorDeps) {
     chunk,
     flush,
     seed(messages: any[]) {
-      post(seedEvents(messages))
+      // history.reset first: after a server restart the page clears before the history arrives (no duplicates)
+      post([{ type: 'history.reset' }, ...seedEvents(messages)])
     },
     turnStart(text: string) {
       brk()
+      streamed = false
       post({ type: 'turn.start' })
       if (text) post({ type: 'user', text })
     },
     turnEnd(e: any) {
-      const text = seg || (typeof e?.answer === 'string' ? e.answer : '')
+      // A turn that ends on a tool call has no text after it: do not repeat earlier text from e.answer.
+      const text = seg || (!streamed && typeof e?.answer === 'string' ? e.answer : '')
       flush()
       if (text) post({ type: 'assistant', text })
       seg = ''
+      streamed = false
       post({ type: 'turn.end', usage: { input: Number(e?.usage?.input_tokens ?? 0), output: Number(e?.usage?.output_tokens ?? 0) } })
     },
     /** Posts tool.start (and the executor card of an Agent call); returns the finisher to call with the outcome. */
@@ -224,6 +255,11 @@ export function registerMirror(on: any, web: () => WebTarget | null): void {
       if (!io) throw new Error('no engine yet')
       return io.after(ms, fn)
     },
+    timeout: ms =>
+      new Promise<void>(resolve => {
+        if (!io) return resolve()
+        io.after(ms, resolve)
+      }),
     send: async events => {
       const w = web()
       if (!w) return

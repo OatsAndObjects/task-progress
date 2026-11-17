@@ -47,38 +47,57 @@ export async function findEdgeWindows(d: OpenDeps): Promise<string | null> {
 
 type Browser = 'chrome' | 'edge' | 'default'
 
-// The argv that opens `url` in the best browser, with the browser's name.
-export async function pickBrowser(d: OpenDeps, url: string): Promise<{ browser: Browser; argv: string[] }> {
+// cmd.exe would reinterpret these in an exe path (`start`): such a path is never launched.
+const UNSAFE_EXE = /[&^%"<>|]/
+
+// Every way to open `url`, best first, each with the browser's name.
+export async function browserCandidates(d: OpenDeps, url: string): Promise<{ browser: Browser; argv: string[] }[]> {
+  const out: { browser: Browser; argv: string[] }[] = []
   if (d.os === 'windows') {
-    const chrome = await findChromeWindows(d)
     // `start` returns at once, so the browser outlives the 30 s run timeout.
-    if (chrome) return { browser: 'chrome', argv: [CMD, '/c', 'start', '', chrome, url] }
+    const chrome = await findChromeWindows(d)
+    if (chrome && !UNSAFE_EXE.test(chrome)) out.push({ browser: 'chrome', argv: [CMD, '/c', 'start', '', chrome, url] })
     const edge = await findEdgeWindows(d)
-    if (edge) return { browser: 'edge', argv: [CMD, '/c', 'start', '', edge, url] }
-    return { browser: 'default', argv: [RUNDLL, 'url.dll,FileProtocolHandler', url] }
+    if (edge && !UNSAFE_EXE.test(edge)) out.push({ browser: 'edge', argv: [CMD, '/c', 'start', '', edge, url] })
+    out.push({ browser: 'default', argv: [RUNDLL, 'url.dll,FileProtocolHandler', url] })
+    return out
   }
   if (d.os === 'mac') {
-    if (await d.exists('/Applications/Google Chrome.app')) return { browser: 'chrome', argv: ['open', '-a', 'Google Chrome', url] }
-    if (await d.exists('/Applications/Microsoft Edge.app')) return { browser: 'edge', argv: ['open', '-a', 'Microsoft Edge', url] }
-    return { browser: 'default', argv: ['open', url] }
+    if (await d.exists('/Applications/Google Chrome.app')) out.push({ browser: 'chrome', argv: ['open', '-a', 'Google Chrome', url] })
+    if (await d.exists('/Applications/Microsoft Edge.app')) out.push({ browser: 'edge', argv: ['open', '-a', 'Microsoft Edge', url] })
+    out.push({ browser: 'default', argv: ['open', url] })
+    return out
   }
   const bg = (bin: string) => ['sh', '-c', '"$0" "$1" >/dev/null 2>&1 &', bin, url]
   const has = async (bin: string) => (await d.run(['sh', '-c', `command -v ${bin}`]).catch(() => ({ exitCode: 1, stdout: '' }))).exitCode === 0
   for (const bin of ['google-chrome', 'google-chrome-stable']) {
-    if (await has(bin)) return { browser: 'chrome', argv: bg(bin) }
+    if (await has(bin)) out.push({ browser: 'chrome', argv: bg(bin) })
   }
-  if (await has('microsoft-edge')) return { browser: 'edge', argv: bg('microsoft-edge') }
-  return { browser: 'default', argv: bg('xdg-open') }
+  if (await has('microsoft-edge')) out.push({ browser: 'edge', argv: bg('microsoft-edge') })
+  out.push({ browser: 'default', argv: bg('xdg-open') })
+  return out
 }
 
+// The argv that opens `url` in the best browser, with the browser's name.
+export async function pickBrowser(d: OpenDeps, url: string): Promise<{ browser: Browser; argv: string[] }> {
+  return (await browserCandidates(d, url))[0]!
+}
+
+// Tries each browser in turn; a launch that throws or exits non-zero moves on to the next.
 export async function openBrowser(d: OpenDeps, url: string): Promise<Browser | 'failed'> {
   try {
-    const pick = await pickBrowser(d, url)
-    await d.run(pick.argv)
-    return pick.browser
+    for (const c of await browserCandidates(d, url)) {
+      try {
+        const r = await d.run(c.argv)
+        if (r && r.exitCode === 0) return c.browser
+      } catch {
+        // try the next browser
+      }
+    }
   } catch {
-    return 'failed'
+    // fall through
   }
+  return 'failed'
 }
 
 // Once per session: the first call opens, later ones do nothing.

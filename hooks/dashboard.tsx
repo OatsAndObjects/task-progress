@@ -295,6 +295,27 @@ async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandR
 // ---- web bridge -------------------------------------------------------
 
 const openState = newOpenState()
+const marksRef = { plugin: 'task-progress', key: 'webMarks' } as const
+
+/** True when this session already opened the dashboard (survives /reload-plugins, which resets module variables). */
+async function openedThisSession($: any): Promise<boolean> {
+  try {
+    const id = String((await $.session.id()) ?? '')
+    const { value } = await $.state.get(marksRef)
+    return Boolean(value && value.opened && value.sessionId === id)
+  } catch {
+    return false
+  }
+}
+
+async function markOpened($: any): Promise<void> {
+  try {
+    const id = String((await $.session.id()) ?? '')
+    await $.state.set(marksRef, { sessionId: id, opened: true })
+  } catch {
+    // the module flag still holds
+  }
+}
 
 async function openDeps($: any): Promise<OpenDeps> {
   const osName = String((await $.env.get('OS')) ?? '')
@@ -340,8 +361,11 @@ async function autoStartWeb($: any) {
   try {
     if ((await $.store.get('autoOpen')) === false) return
     if (c.web || c.starting || openState.opened) return
+    const already = await openedThisSession($)
+    if (already) openState.opened = true
     const w = await startWeb($)
-    if (!w) return
+    if (!w || already) return
+    await markOpened($)
     await openOnce(openState, await openDeps($), w.url)
   } catch {
     // best effort
