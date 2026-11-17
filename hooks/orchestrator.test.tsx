@@ -275,3 +275,22 @@ test('/orchestrate arguments', async ($, on) => {
   expect((await run($, ' OFF ')).text).toBe('Orchestrator mode off.')
   expect((await run($, 'bogus')).text).toBe('Usage: /orchestrate on | off | status')
 })
+
+test('CubeAnswer passes the input gate; state-changing tools stay gated', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await $.prompt.submit({ text: 'a question about a cube step' })
+  expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
+  const plan = await call(PLAN, {
+    task: 'T',
+    cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: ['a', 'b'], doneWhen: 'ok', minutes: 3 }],
+  })
+  expect(String(plan.result)).toContain('cube plan recorded')
+  const ans = await call('mcp__task-progress__CubeAnswer', { id: 'c1', answer: 'It adds the thing.' })
+  expect(ans.deny).toBeUndefined()
+  expect(String(ans.result)).toContain('answer posted to c1')
+  const bad = await call('mcp__task-progress__CubeAnswer', { id: 'zz', answer: 'x' })
+  expect(bad.deny).toBeUndefined()
+  expect(String(bad.result)).toContain('answer not posted')
+  expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
+})

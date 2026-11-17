@@ -275,6 +275,11 @@ const ACTIONS = {
     if (!isText(a.note, 2000)) return { error: 'note required (max 2000 chars)' };
     return { args: { id: a.id.trim(), note: a.note.trim() } };
   },
+  'cube.ask': (a) => {
+    if (!isCubeId(a.id)) return { error: 'id required (max 40 chars)' };
+    if (!isText(a.text, 2000)) return { error: 'text required (max 2000 chars)' };
+    return { args: { id: a.id.trim(), text: a.text.trim() } };
+  },
   'cube.add': (a) => {
     const unknown = Object.keys(a).filter((k) => !CUBE_FIELDS.includes(k));
     if (unknown.length) return { error: 'unknown field(s): ' + unknown.join(', ') };

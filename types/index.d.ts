@@ -118,7 +118,10 @@ export type Cube = {
   agentId?: string
   startedAt?: number
   endedAt?: number
+  /** Questions the user asked about this step and Claude's answers (never changes the cube). */
+  thread?: CubeMessage[]
 }
+export type CubeMessage = { role: 'user' | 'claude'; text: string; at: number }
 export type CubeBoard = {
   task: string
   /** When true, only cubes the user approved may be dispatched. */

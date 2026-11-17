@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { buildBoard, checkAtomic, computeLanes, finishAndRelease, gateCheck, normalizeCube, reviseCube, runCubeCommand, topoOrder } from './cubes-model'
+import { addThreadMessage, answerCube, buildBoard, checkAtomic, computeLanes, finishAndRelease, gateCheck, normalizeCube, reviseCube, runCubeCommand, topoOrder } from './cubes-model'
 import { commandFromLine, parseBudget } from './dashboard-model'
 
 const ok = (id: string, after: string[] = [], extra: any = {}) => ({
@@ -220,4 +220,51 @@ test('commandFromLine keeps the cube sentence apart from the command action', ()
   const old = commandFromLine({ type: 'command', id: 'x2', action: 'cube.add', args: { action: 'Old style sentence' } })
   expect(old.cmd.action).toBe('cube.add')
   expect(old.cmd.cubeAction).toBe('Old style sentence')
+})
+
+// ---- cube questions (cube.ask / CubeAnswer) ----
+test('cube.ask appends a user message, sends the question prompt and changes nothing else', async () => {
+  const g = rig(pair())
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  g.prompts.length = 0
+  const before = JSON.stringify({ ...g.cube('c1'), thread: undefined })
+  const res: any = await run(g.d, 'cube.ask', { id: 'c1', text: 'why sqlite?' })
+  expect(res.ok).toBe(true)
+  expect(g.prompts.length).toBe(1)
+  expect(g.prompts[0]).toContain('[cube question c1 "tc1"] why sqlite?')
+  expect(g.prompts[0]).toContain('CubeAnswer')
+  expect(g.prompts[0]).toContain('id "c1"')
+  expect(g.cube('c1').thread).toEqual([{ role: 'user', text: 'why sqlite?', at: expect.any(Number) }])
+  expect(JSON.stringify({ ...g.cube('c1'), thread: undefined })).toBe(before)
+  expect(g.st('c1')).toBe('approved')
+})
+
+test('cube.ask works on a running cube; unknown id and empty text are errors', async () => {
+  const g = rig(pair())
+  g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, status: 'running' } : c)) } })
+  expect((await run(g.d, 'cube.ask', { id: 'c1', text: 'how far along?' }))!.ok).toBe(true)
+  const none: any = await run(g.d, 'cube.ask', { id: 'c9', text: 'hi' })
+  expect(none.ok).toBe(false)
+  expect(none.message).toContain('no cube c9')
+  const empty: any = await run(g.d, 'cube.ask', { id: 'c1', text: '   ' })
+  expect(empty.ok).toBe(false)
+  expect(g.prompts.length).toBe(1)
+  expect(g.st('c1')).toBe('running')
+})
+
+test('answerCube appends a claude message, leaves the cube as it was, caps the thread', () => {
+  const r: any = buildBoard('T', pair(), true)
+  const before = JSON.stringify(r.board.cubes[0])
+  const out: any = answerCube(r.board, { id: 'C1', answer: 'Because.' }, 77)
+  expect(out.message).toBe('answer posted to c1')
+  const c = out.board.cubes[0]
+  expect(c.thread).toEqual([{ role: 'claude', text: 'Because.', at: 77 }])
+  expect(JSON.stringify({ ...c, thread: undefined })).toBe(before)
+  expect(c.version).toBe(1)
+  expect(answerCube(r.board, { id: 'c9', answer: 'x' }, 1)).toHaveProperty('error')
+  expect(answerCube(r.board, { id: 'c1', answer: ' ' }, 1)).toHaveProperty('error')
+  let b = r.board
+  for (let i = 0; i < 60; i++) b = addThreadMessage(b, 'c1', 'user', 'm' + i, i)
+  expect(b.cubes[0].thread.length).toBe(50)
+  expect(b.cubes[0].thread[49].text).toBe('m59')
 })

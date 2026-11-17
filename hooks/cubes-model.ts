@@ -1,6 +1,6 @@
 // Approval cubes: the pure parts. A task is broken into atomic cubes; the user
 // approves (or changes) each one before it runs. Nothing here touches `$`.
-import type { Cube, CubeBoard, CubeStatus, DashboardCommand, DashboardCommandResult, Snapshot, SnapshotPlanStep } from '../types/index'
+import type { Cube, CubeBoard, CubeMessage, CubeStatus, DashboardCommand, DashboardCommandResult, Snapshot, SnapshotPlanStep } from '../types/index'
 
 export const CUBE_MAX = 40
 export const CUBE_MAX_MINUTES = 10
@@ -279,6 +279,36 @@ export function reviseCube(board: CubeBoard, input: any): { board: CubeBoard; me
   }
 }
 
+export const THREAD_MAX = 50
+export const THREAD_TEXT_MAX = 2000
+
+/** Appends one message to a cube's thread; nothing else on the cube changes (version included). */
+export function addThreadMessage(board: CubeBoard, id: string, role: 'user' | 'claude', text: string, at: number): CubeBoard {
+  const msg: CubeMessage = { role, text: text.slice(0, THREAD_TEXT_MAX), at }
+  return {
+    ...board,
+    cubes: board.cubes.map(c => (c.id === id ? { ...c, thread: [...(c.thread ?? []), msg].slice(-THREAD_MAX) } : c)),
+  }
+}
+
+/** CubeAnswer: Claude's reply to a cube question. */
+export function answerCube(board: CubeBoard, input: any, at: number): { board: CubeBoard; message: string } | { error: string } {
+  const id = str(input?.id).toLowerCase()
+  if (!board.cubes.some(x => x.id === id)) return { error: `no cube ${id || '(id missing)'}` }
+  const answer = str(input?.answer)
+  if (!answer) return { error: 'answer is empty: say it in plain words' }
+  return { board: addThreadMessage(board, id, 'claude', answer, at), message: `answer posted to ${id}` }
+}
+
+/** The prompt that carries a cube question into the session. */
+export function askPrompt(c: Cube, text: string): string {
+  return (
+    `[cube question ${c.id} "${c.title}"] ${text}
+` +
+    `Answer only (do not change, approve, revise or dispatch this cube): call CubeAnswer with id "${c.id}" and your answer in plain words.`
+  )
+}
+
 export function setCube(board: CubeBoard, id: string, patch: Partial<Cube>): CubeBoard {
   return { ...board, cubes: board.cubes.map(c => (c.id === id ? { ...c, ...patch, id: c.id } : c)) }
 }
@@ -517,6 +547,16 @@ export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promis
       d.put(withBoard(d.get(), next))
       await d.submit(changePrompt(next.cubes.find(x => x.id === id)!, note), { keepInputCheck: true })
       return ok(`change request for cube ${id} sent to Claude`)
+    }
+    case 'cube.ask': {
+      const c = board.cubes.find(x => x.id === id)
+      if (!c) return fail(`no cube ${id}`)
+      const text = str(cmd.text).slice(0, THREAD_TEXT_MAX)
+      if (!text) return fail('text is required: ask a question')
+      const next = addThreadMessage(board, id, 'user', text, d.now())
+      d.put(withBoard(d.get(), next))
+      await d.submit(askPrompt(c, text), { keepInputCheck: true })
+      return ok(`question for cube ${id} sent to Claude`)
     }
     case 'cube.add': {
       const n = Math.max(0, ...board.cubes.map(c => Number(/^c(\d+)$/.exec(c.id)?.[1] ?? 0))) + 1

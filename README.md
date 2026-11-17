@@ -68,6 +68,10 @@ If another plugin bypasses prompt.compose, the rules are attached to user prompt
 
 Night-sky dashboard restyle. Web: starfield, constellation progress, countdown rings, telemetry log, glass kanban, light theme. Pane: bordered sections with glyphs, ▰▱ budget bars.
 
+## Ask about a cube (0.9.0)
+
+On the web dashboard each cube has an **Ask** button ("Questions only - the cube stays as it is") that opens a small chat about that step; it is separate from the change-request button. A question is sent to the session as `[cube question <id> "<title>"] <text>`; Claude answers with the `CubeAnswer` tool (`id`, `answer`) and the answer shows in that cube's thread. Asking never changes, approves, revises or dispatches the cube, and does not bump its version. Threads keep the last 50 messages (2000 characters each); the pane only shows a `💬 n` count.
+
 ## Install (local directory marketplace)
 
 Place this folder inside a directory that you add as a local marketplace, then install the plugin from it:

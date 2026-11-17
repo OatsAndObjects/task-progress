@@ -1,6 +1,7 @@
 import type { Register } from 'claude-code'
 
 import {
+  dashAnswerCube,
   dashCubesGate,
   dashGetCubes,
   dashMode,
@@ -26,7 +27,8 @@ const TOOL = 'mcp__task-progress__TaskProgress'
 const PLAN_TOOL = 'mcp__task-progress__TaskPlan'
 const INPUTS_TOOL = 'mcp__task-progress__TaskInputs'
 const CUBE_TOOL = 'mcp__task-progress__CubeRevise'
-const OWN_TOOLS: readonly string[] = [TOOL, PLAN_TOOL, INPUTS_TOOL, CUBE_TOOL]
+const ANSWER_TOOL = 'mcp__task-progress__CubeAnswer'
+const OWN_TOOLS: readonly string[] = [TOOL, PLAN_TOOL, INPUTS_TOOL, CUBE_TOOL, ANSWER_TOOL]
 /** Tools that change state; the main session may not use them before TaskInputs. */
 export const GATED_TOOLS: readonly string[] = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent']
 /** Share of the budget after which an executor is told to wrap up. */
@@ -537,6 +539,20 @@ export const register: Register = on => {
         required: ['id'],
       },
     })
+    await $.tool.register({
+      name: 'CubeAnswer',
+      description:
+        "Answer the user's question about an approval cube (a prompt starting '[cube question <id> ...]'). The answer shows in that cube's thread on the dashboard. It never changes, approves or dispatches the cube.",
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The cube id from the question prompt.' },
+          answer: { type: 'string', description: 'Your answer in plain words.' },
+        },
+        required: ['id', 'answer'],
+      },
+    })
     try {
       await $.command.register({
         name: 'tp-cubes',
@@ -645,6 +661,11 @@ export const register: Register = on => {
         ? `${r.message}. It is back with the user as proposed; STOP and wait for the approval prompt.`
         : `cube not revised: ${r.message}`,
     }
+  })
+
+  on('tool.call', { tool: ANSWER_TOOL }, async ($, e, next) => {
+    const r = await dashAnswerCube($, e)
+    return { result: r.ok ? `${r.message}. Nothing else changed; do not act on the cube.` : `answer not posted: ${r.message}` }
   })
 
   on('command.run', { command: 'tp-cubes' }, async ($, e) => {

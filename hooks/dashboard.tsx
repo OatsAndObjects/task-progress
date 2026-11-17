@@ -30,7 +30,7 @@ import {
   touchFile,
   type CommandDeps,
 } from './dashboard-model'
-import { finishAndRelease, markRunning, reviseCube, withBoard } from './cubes-model'
+import { answerCube, finishAndRelease, markRunning, reviseCube, withBoard } from './cubes-model'
 import type { CubeBoard } from '../types/index'
 
 export const PANE_ID = 'tp-dashboard'
@@ -591,6 +591,7 @@ export function registerDashboard(on: any): void {
                                 <Text bold color={col}>{cb.id + ' '}</Text>
                                 <Text>{cut(cb.title, Math.max(8, laneW - 18))}</Text>
                                 <Text dimColor>{`  ${cb.minutes}m`}</Text>
+                                {cb.thread && cb.thread.length > 0 ? <Text dimColor>{`  💬 ${cb.thread.length}`}</Text> : null}
                               </Box>
                               <Text color={col}>{`${glyphOf(g)} ${cb.status}${cb.after.length ? ' · after ' + cb.after.join(',') : ''}`}</Text>
                               {flow.map((f, i) => (
@@ -783,6 +784,17 @@ export async function dashReviseCube($: any, input: any): Promise<{ ok: boolean;
   const s = await load($)
   if (!s.cubes) return { ok: false, message: 'no cube board: plan the task with TaskPlan cubes first' }
   const r = reviseCube(s.cubes, input)
+  if ('error' in r) return { ok: false, message: r.error }
+  put($, withBoard(c.snap ?? s, r.board))
+  await flush($)
+  return { ok: true, message: r.message }
+}
+
+/** CubeAnswer from the model: adds Claude's answer to the cube's thread. */
+export async function dashAnswerCube($: any, input: any): Promise<{ ok: boolean; message: string }> {
+  const s = await load($)
+  if (!s.cubes) return { ok: false, message: 'no cube board' }
+  const r = answerCube(s.cubes, input, await $.clock.now())
   if ('error' in r) return { ok: false, message: r.error }
   put($, withBoard(c.snap ?? s, r.board))
   await flush($)
