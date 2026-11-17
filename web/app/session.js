@@ -256,11 +256,11 @@
       endStream(); clearEmpty();
       if (perms[e.id]) return;
       var cmd = e.input && (e.input.command || e.input.file_path || JSON.stringify(e.input));
-      var p = div('perm', '<h4>Claude wants to run ' + esc(e.tool) + '</h4><p class="muted" style="font-size:14px;margin-top:2px">The tool call is paused until you decide.</p><pre>' + esc(cmd || '') + '</pre>' +
+      var p = div('perm', '<h4>Claude wants to run ' + esc(e.tool) + '</h4><p class="muted" style="font-size:14px;margin-top:2px">The tool call is paused until you decide.' + (e.agent ? ' Agent: ' + esc(e.agent) + '.' : '') + (e.reason ? ' Why: ' + esc(e.reason) + (e.askedBy ? ' (' + esc(e.askedBy) + ')' : '') : '') + '</p><pre>' + esc(cmd || '') + '</pre>' +
         '<div class="acts"><button class="btn pri" data-id="' + esc(e.id) + '" data-d="allow">Allow once</button><button class="btn" data-id="' + esc(e.id) + '" data-d="allowAlways">Always allow</button><button class="btn danger" data-id="' + esc(e.id) + '" data-d="deny">Deny</button></div>');
       perms[e.id] = { el: p, done: false }; add(p); return;
     }
-    if ((t === 'permission.answered' || t === 'permission.resolved') && perms[e.id] && !perms[e.id].done) { perms[e.id].done = true; perms[e.id].el.classList.add('done'); perms[e.id].el.querySelector('.acts').innerHTML = '<span class="chip">Answered elsewhere</span>'; return; }
+    if ((t === 'permission.answered' || t === 'permission.resolved') && perms[e.id] && !perms[e.id].done) { perms[e.id].done = true; perms[e.id].el.classList.add('done'); perms[e.id].el.querySelector('.acts').innerHTML = '<span class="chip">' + (e.by === 'terminal' || e.by === 'timeout' ? 'Answer it in the terminal' : 'Answered elsewhere') + '</span>'; return; }
     if (t === 'waiting') {
       endStream(); clearEmpty();
       add(div('ask', '<div class="ic">!</div><div><h4>Waiting in the terminal</h4><p class="muted" style="font-size:14.5px">Claude asked you a question: <b>' + esc(e.question) + '</b><br>This kind of question can only be answered in the terminal window. Switch to it, pick an answer, and this page will carry on by itself.</p></div>'));
