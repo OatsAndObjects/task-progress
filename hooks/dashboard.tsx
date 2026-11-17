@@ -30,7 +30,7 @@ import {
   touchFile,
   type CommandDeps,
 } from './dashboard-model'
-import { answerCube, finishAndRelease, markRunning, reviseCube, withBoard } from './cubes-model'
+import { answerCube, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviewCubeResult, reviseCube, withBoard } from './cubes-model'
 import type { CubeBoard } from '../types/index'
 
 export const PANE_ID = 'tp-dashboard'
@@ -114,8 +114,9 @@ async function load($: any): Promise<Snapshot> {
   if (c.snap) return c.snap
   const { value } = await $.state.get(snapRef)
   if (value) {
-    c.snap = value
-    return value
+    // Boards stored before function-level flow hold strings; show them as steps with only `does`.
+    c.snap = value.cubes ? { ...value, cubes: normalizeBoardFlow(value.cubes) } : value
+    return c.snap!
   }
   const now: number = await $.clock.now()
   c.snap = emptySnapshot({ id: '', cwd: '', startedAt: now }, await isOrchestrateOn($))
@@ -581,7 +582,10 @@ export function registerDashboard(on: any): void {
                           const cb = s.cubes!.cubes.find(x => x.id === id)
                           if (!cb) return null
                           const col = cubeColor(cb.status)
-                          const flow = cb.flow.length > 2 ? [...cb.flow.slice(0, 2), `… +${cb.flow.length - 2} more`] : cb.flow
+                          const flow = cb.flow.length > 2 ? [...cb.flow.slice(0, 2), null] : cb.flow
+                          const rv = cb.review
+                          const sev = (n: string) => (rv?.findings ?? []).filter(x => x.severity === n).length
+                          const blockers = [sev('P0') ? `P0×${sev('P0')}` : '', sev('P1') ? `P1×${sev('P1')}` : ''].filter(Boolean).join(' ')
                           const isOpen = cb.status === 'proposed' || cb.status === 'failed' || cb.status === 'rejected' || cb.status === 'revising'
                           const canChange = cb.status !== 'running' && cb.status !== 'done'
                           const g = cb.status === 'approved' || cb.status === 'queued' || cb.status === 'proposed' ? 'pending' : cb.status === 'rejected' ? 'failed' : cb.status
@@ -594,9 +598,28 @@ export function registerDashboard(on: any): void {
                                 {cb.thread && cb.thread.length > 0 ? <Text dimColor>{`  💬 ${cb.thread.length}`}</Text> : null}
                               </Box>
                               <Text color={col}>{`${glyphOf(g)} ${cb.status}${cb.after.length ? ' · after ' + cb.after.join(',') : ''}`}</Text>
-                              {flow.map((f, i) => (
-                                <Text key={`cube-${cb.id}-f${i}`} dimColor>{cut(i < 2 ? `${i + 1}. ${f}` : f, laneW - 4)}</Text>
-                              ))}
+                              {flow.map((f, i) =>
+                                f === null ? (
+                                  <Text key={`cube-${cb.id}-f${i}`} dimColor>{`… +${cb.flow.length - 2} more`}</Text>
+                                ) : (
+                                  <Box key={`cube-${cb.id}-f${i}`} flexDirection="column">
+                                    <Text dimColor>{cut(`${i + 1} ${flowLabel(f)}${f.file || f.fn ? '  ' + f.does : ''}`, laneW - 4)}</Text>
+                                    {f.calls ? <Text dimColor>{cut(`  → ${f.calls.split('/').pop()}`, laneW - 4)}</Text> : null}
+                                  </Box>
+                                ),
+                              )}
+                              {rv ? (
+                                <Text color={rv.status === 'passed' ? C_DONE : rv.status === 'running' ? C_CUBE_RUN : rv.status === 'changes' ? C_OVER : C_WARN}>
+                                  {cut(
+                                    rv.status === 'running'
+                                      ? 'review ◐ running'
+                                      : rv.status === 'passed'
+                                        ? 'review ✓ APPROVE'
+                                        : `review ${rv.status === 'changes' ? '✗ REQUEST CHANGES' : '? NEEDS INVESTIGATION'}${blockers ? ` · ${blockers}` : ''}`,
+                                    laneW - 4,
+                                  )}
+                                </Text>
+                              ) : null}
                               {cb.note ? <Text color={C_WARN}>{cut('note: ' + cb.note, laneW - 4)}</Text> : null}
                               {canChange ? (
                                 <Box>
@@ -795,6 +818,17 @@ export async function dashAnswerCube($: any, input: any): Promise<{ ok: boolean;
   const s = await load($)
   if (!s.cubes) return { ok: false, message: 'no cube board' }
   const r = answerCube(s.cubes, input, await $.clock.now())
+  if ('error' in r) return { ok: false, message: r.error }
+  put($, withBoard(c.snap ?? s, r.board))
+  await flush($)
+  return { ok: true, message: r.message }
+}
+
+/** CubeReview from the model: stores the pr-reviewer result on the cube. */
+export async function dashReviewCube($: any, input: any): Promise<{ ok: boolean; message: string }> {
+  const s = await load($)
+  if (!s.cubes) return { ok: false, message: 'no cube board' }
+  const r = reviewCubeResult(s.cubes, input, await $.clock.now())
   if ('error' in r) return { ok: false, message: r.error }
   put($, withBoard(c.snap ?? s, r.board))
   await flush($)

@@ -93,6 +93,30 @@ export type UserTask = {
   updatedAt: number
   source: 'user' | 'plan'
 }
+/** One function-level step of a cube. Boards stored before 0.10 hold strings, normalized to `{file:'',fn:'',does}`. */
+export type FlowStep = {
+  /** Repo-relative path, or "shell" / "browser" / "terminal" for non-code steps. */
+  file: string
+  /** Function, method or component; for non-code steps the command or tool. */
+  fn: string
+  /** One short sentence. */
+  does: string
+  /** Optional "file:fn" of the next function it calls. */
+  calls?: string
+}
+export type ReviewVerdict = 'APPROVE' | 'REQUEST_CHANGES' | 'NEEDS_INVESTIGATION'
+export type ReviewFinding = { severity: 'P0' | 'P1' | 'P2' | 'P3'; file?: string; line?: number; summary: string }
+export type ReviewQuiz = { q: string; options: string[]; answer: number }
+/** The pr-reviewer stage every cube ends with. */
+export type CubeReview = {
+  status: 'running' | 'passed' | 'changes' | 'investigate'
+  verdict?: ReviewVerdict
+  summary?: string
+  understanding?: string
+  findings?: ReviewFinding[]
+  quiz?: ReviewQuiz[]
+  at: number
+}
 export type CubeStatus = 'proposed' | 'approved' | 'queued' | 'running' | 'done' | 'failed' | 'skipped' | 'rejected' | 'revising'
 /** One atomic unit of a task the user approves before it runs. */
 export type Cube = {
@@ -101,8 +125,8 @@ export type Cube = {
   title: string
   /** One sentence: the single thing this cube does. */
   action: string
-  /** 2-6 ordered micro-steps inside the cube. */
-  flow: string[]
+  /** 2-6 ordered function-level steps inside the cube. */
+  flow: FlowStep[]
   /** Ids of cubes that must be done first. */
   after: string[]
   /** A verifiable check that proves the cube is done. */
@@ -120,6 +144,8 @@ export type Cube = {
   endedAt?: number
   /** Questions the user asked about this step and Claude's answers (never changes the cube). */
   thread?: CubeMessage[]
+  /** The PR review of this cube's changes (pr-reviewer skill). */
+  review?: CubeReview
 }
 export type CubeMessage = { role: 'user' | 'claude'; text: string; at: number }
 export type CubeBoard = {

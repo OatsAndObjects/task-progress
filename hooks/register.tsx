@@ -2,6 +2,7 @@ import type { Register } from 'claude-code'
 
 import {
   dashAnswerCube,
+  dashReviewCube,
   dashCubesGate,
   dashGetCubes,
   dashMode,
@@ -28,7 +29,8 @@ const PLAN_TOOL = 'mcp__task-progress__TaskPlan'
 const INPUTS_TOOL = 'mcp__task-progress__TaskInputs'
 const CUBE_TOOL = 'mcp__task-progress__CubeRevise'
 const ANSWER_TOOL = 'mcp__task-progress__CubeAnswer'
-const OWN_TOOLS: readonly string[] = [TOOL, PLAN_TOOL, INPUTS_TOOL, CUBE_TOOL, ANSWER_TOOL]
+const REVIEW_TOOL = 'mcp__task-progress__CubeReview'
+const OWN_TOOLS: readonly string[] = [TOOL, PLAN_TOOL, INPUTS_TOOL, CUBE_TOOL, ANSWER_TOOL, REVIEW_TOOL]
 /** Tools that change state; the main session may not use them before TaskInputs. */
 export const GATED_TOOLS: readonly string[] = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent']
 /** Share of the budget after which an executor is told to wrap up. */
@@ -64,9 +66,21 @@ const ORCH_PROMPT = [
   '2) Break the task into steps and call TaskPlan (task, steps with minutes).',
   `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt whose first line is "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
   '4) Do not edit code or run builds yourself; review reports, re-plan, update TaskProgress. If an executor ran out of time, re-dispatch the rest with a new budget.',
-  'Multi-action tasks: TaskPlan with `cubes` ({id,title,action,flow 2-6,after,doneWhen,minutes<=10}, atomic), then STOP: the user approves each cube; approvals arrive as prompts. Never dispatch an unapproved cube; tag "cubes: <ids>" in the budget line. Change requests: CubeRevise.',
+  'Multi-action tasks: TaskPlan `cubes` (id,title,action,flow 2-6 steps {file,fn,does,calls?} down to functions (non-code: file "shell", fn the command),after,doneWhen,minutes<=10), then STOP: the user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Changes: CubeRevise.',
+  'Each cube ends with a review: after its executor reports, dispatch one running Skill "pr-reviewer" on its changed files, then CubeReview; fix P0/P1 before done.',
   'Full protocol: skill task-progress:orchestrate. Executor agents ignore this section.',
 ].join(' ')
+
+const FLOW_STEP_SCHEMA = {
+  type: 'object',
+  properties: {
+    file: { type: 'string', description: 'Repo-relative path, or "shell" / "browser" / "terminal" for non-code steps.' },
+    fn: { type: 'string', description: 'Function, method or component; for non-code steps the command or tool, e.g. "claude plugin test".' },
+    does: { type: 'string', description: 'One short sentence (max 200 characters).' },
+    calls: { type: 'string', description: 'Optional "file:fn" of the next function it calls.' },
+  },
+  required: ['file', 'fn', 'does'],
+}
 
 const CUBE_SCHEMA = {
   type: 'object',
@@ -74,7 +88,7 @@ const CUBE_SCHEMA = {
     id: { type: 'string', description: 'c1, c2, ...' },
     title: { type: 'string' },
     action: { type: 'string', description: 'One sentence: the single thing this cube does (max ~200 characters).' },
-    flow: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 6, description: '2-6 ordered micro-steps inside the cube.' },
+    flow: { type: 'array', items: FLOW_STEP_SCHEMA, minItems: 2, maxItems: 6, description: '2-6 ordered function-level steps inside the cube: each names the file and function, what it does, and which function it calls next.' },
     after: { type: 'array', items: { type: 'string' }, description: 'Ids of cubes that must be done first.' },
     doneWhen: { type: 'string', description: 'A verifiable check that proves the cube is done.' },
     files: { type: 'array', items: { type: 'string' } },
@@ -513,7 +527,12 @@ export const register: Register = on => {
               required: ['title', 'minutes'],
             },
           },
-          cubes: { type: 'array', items: CUBE_SCHEMA, description: 'Atomic approval cubes; preferred over steps. The user approves each before it runs.' },
+          cubes: {
+            type: 'array',
+            items: CUBE_SCHEMA,
+            description:
+              'Atomic approval cubes; preferred over steps. The user approves each before it runs. Break every cube down to functions: each flow step names the file and function, what it does, and which function it calls next; non-code steps use file "shell" and the command as fn. Every cube ends with a PR review (pr-reviewer skill, then CubeReview).',
+          },
         },
         required: ['task'],
       },
@@ -529,7 +548,7 @@ export const register: Register = on => {
           id: { type: 'string' },
           title: { type: 'string' },
           action: { type: 'string' },
-          flow: { type: 'array', items: { type: 'string' } },
+          flow: { type: 'array', items: FLOW_STEP_SCHEMA, description: 'Function-level steps: file, fn, does, optional calls.' },
           after: { type: 'array', items: { type: 'string' } },
           doneWhen: { type: 'string' },
           files: { type: 'array', items: { type: 'string' } },
@@ -551,6 +570,47 @@ export const register: Register = on => {
           answer: { type: 'string', description: 'Your answer in plain words.' },
         },
         required: ['id', 'answer'],
+      },
+    })
+    await $.tool.register({
+      name: 'CubeReview',
+      description:
+        "Store the PR review of a cube's changes (from the pr-reviewer skill, run by an executor after the cube's executor reported, or when a prompt starts '[cube review <id> ...]'). APPROVE lets the cube be marked done; REQUEST_CHANGES keeps it open: dispatch a fix executor for the P0/P1 findings and review again.",
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The cube id.' },
+          verdict: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES', 'NEEDS_INVESTIGATION'] },
+          summary: { type: 'string', description: 'The review in plain words.' },
+          understanding: { type: 'string', description: 'The Feature Understanding Report summary.' },
+          findings: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                severity: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+                file: { type: 'string' },
+                line: { type: 'number' },
+                summary: { type: 'string' },
+              },
+              required: ['severity', 'summary'],
+            },
+          },
+          quiz: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                q: { type: 'string' },
+                options: { type: 'array', items: { type: 'string' } },
+                answer: { type: 'number', description: '0-based index of the right option.' },
+              },
+              required: ['q', 'options', 'answer'],
+            },
+          },
+        },
+        required: ['id', 'verdict', 'summary'],
       },
     })
     try {
@@ -666,6 +726,11 @@ export const register: Register = on => {
   on('tool.call', { tool: ANSWER_TOOL }, async ($, e, next) => {
     const r = await dashAnswerCube($, e)
     return { result: r.ok ? `${r.message}. Nothing else changed; do not act on the cube.` : `answer not posted: ${r.message}` }
+  })
+
+  on('tool.call', { tool: REVIEW_TOOL }, async ($, e, next) => {
+    const r = await dashReviewCube($, e)
+    return { result: r.ok ? `${r.message}.` : `review not stored: ${r.message}` }
   })
 
   on('command.run', { command: 'tp-cubes' }, async ($, e) => {

@@ -235,7 +235,7 @@ test('mode off: no gate, no budget tag needed, no timing, no protocol text; on r
   expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
   out = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })
   expect(out.sections.map((s: any) => s.id)).toEqual(['intro', 'task-progress:orchestrator', 'task-progress:progress-bar'])
-  expect(out.sections[1].text.length).toBeLessThan(1100)
+  expect(out.sections[1].text.length).toBeLessThan(1250)
 })
 
 test('no compose: first user prompt carries the rules, the next only a reminder', async ($, on) => {
@@ -283,7 +283,7 @@ test('CubeAnswer passes the input gate; state-changing tools stay gated', async 
   expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
   const plan = await call(PLAN, {
     task: 'T',
-    cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: ['a', 'b'], doneWhen: 'ok', minutes: 3 }],
+    cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }],
   })
   expect(String(plan.result)).toContain('cube plan recorded')
   const ans = await call('mcp__task-progress__CubeAnswer', { id: 'c1', answer: 'It adds the thing.' })
@@ -292,5 +292,20 @@ test('CubeAnswer passes the input gate; state-changing tools stay gated', async 
   const bad = await call('mcp__task-progress__CubeAnswer', { id: 'zz', answer: 'x' })
   expect(bad.deny).toBeUndefined()
   expect(String(bad.result)).toContain('answer not posted')
+  expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
+})
+
+test('CubeReview passes the input gate, stores the review and is registered', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await $.prompt.submit({ text: 'review a cube' })
+  expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
+  await call(PLAN, { task: 'T', cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }] })
+  const rev = await call('mcp__task-progress__CubeReview', { id: 'c1', verdict: 'REQUEST_CHANGES', summary: 'one bug', findings: [{ severity: 'P1', file: 'a.ts', line: 3, summary: 'null deref' }] })
+  expect(rev.deny).toBeUndefined()
+  expect(String(rev.result)).toContain('review stored for c1: REQUEST_CHANGES')
+  const bad = await call('mcp__task-progress__CubeReview', { id: 'zz', verdict: 'APPROVE', summary: 'x' })
+  expect(bad.deny).toBeUndefined()
+  expect(String(bad.result)).toContain('review not stored')
   expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
 })

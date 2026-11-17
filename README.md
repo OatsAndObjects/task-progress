@@ -41,7 +41,7 @@ Security of the web app: it binds 127.0.0.1 only; every `/api/*` call needs a ra
 
 For a multi-action task, Claude calls `TaskPlan` with `cubes` instead of plain steps and then stops. Each cube is one small, checkable piece of work, and nothing runs until you approve it.
 
-**How a task becomes cubes.** A cube has an `id` (c1, c2, ...), a `title`, one `action` sentence, a `flow` of 2-6 ordered micro-steps, `after` (cubes that must finish first), `doneWhen` (a check that proves it is done), optional `files`, and `minutes` (at most 10). The cubes form a graph; the plan section and the progress bar mirror it, one step per cube.
+**How a task becomes cubes.** A cube has an `id` (c1, c2, ...), a `title`, one `action` sentence, a `flow` of 2-6 ordered function-level steps (see 0.10.0), `after` (cubes that must finish first), `doneWhen` (a check that proves it is done), optional `files`, and `minutes` (at most 10). The cubes form a graph; the plan section and the progress bar mirror it, one step per cube.
 
 **Atomic rules.** The plan is refused whole, naming the cube to fix, when a cube has no action, an action over 200 characters, fewer than 2 or more than 6 flow steps ("Give cube cX at least 2 flow steps"), no `doneWhen`, no minutes or more than 10, or when ids repeat, `after` names an unknown cube, there is a cycle, or there are more than 40 cubes.
 
@@ -71,6 +71,14 @@ Night-sky dashboard restyle. Web: starfield, constellation progress, countdown r
 ## Ask about a cube (0.9.0)
 
 On the web dashboard each cube has an **Ask** button ("Questions only - the cube stays as it is") that opens a small chat about that step; it is separate from the change-request button. A question is sent to the session as `[cube question <id> "<title>"] <text>`; Claude answers with the `CubeAnswer` tool (`id`, `answer`) and the answer shows in that cube's thread. Asking never changes, approves, revises or dispatches the cube, and does not bump its version. Threads keep the last 50 messages (2000 characters each); the pane only shows a `💬 n` count.
+
+## Function-level cube flow (0.10.0)
+
+Each flow step is now an object, not a sentence: `{ file, fn, does, calls? }`. `file` is the repo-relative path (or `shell`, `browser`, `terminal` for non-code steps), `fn` the function, method or component (for non-code steps the command or tool, such as `claude plugin test`), `does` one short sentence, and `calls` an optional `file:fn` of the next function it calls. Break every cube down to functions. A step missing `file`, `fn` or `does` is refused with `flow[2] needs file, fn and does - e.g. {...}`; caps are 200, 120, 200 and 240 characters. Boards stored before 0.10.0 with string steps still load and show the text as the step. The pane shows `1 register.tsx > onPromptSubmit()  resets the input gate` and `-> dashboard.tsx:onPromptSubmit`.
+
+## PR review stage (pr-reviewer skill) (0.10.0)
+
+Every cube ends with a PR review. After the cube's executor reports, the orchestrator dispatches an executor that runs the `pr-reviewer` skill on the cube's changed files and calls the new `CubeReview` tool (`id`, `verdict` APPROVE / REQUEST_CHANGES / NEEDS_INVESTIGATION, `summary`, optional `understanding`, `findings` P0-P3 with file and line, `quiz`). The review is kept on the cube (`review.status` running, passed, changes or investigate; at most 50 findings, 10 quiz questions, 4000 characters per text). APPROVE lets the cube be marked done; REQUEST_CHANGES reopens it (done becomes approved) and tells Claude to dispatch a fix executor for the P0/P1 findings and review again. The dashboard command `cube.review {id}` starts a review from the UI: it sets `review.status` to running and sends a `[cube review <id> "<title>"]` prompt. The pane shows `review ✓ APPROVE`, `review ✗ REQUEST CHANGES · P1×2` or `review ◐ running`. `CubeReview` is never blocked by the orchestrator gates.
 
 ## Install (local directory marketplace)
 

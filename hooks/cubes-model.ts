@@ -1,6 +1,6 @@
 // Approval cubes: the pure parts. A task is broken into atomic cubes; the user
 // approves (or changes) each one before it runs. Nothing here touches `$`.
-import type { Cube, CubeBoard, CubeMessage, CubeStatus, DashboardCommand, DashboardCommandResult, Snapshot, SnapshotPlanStep } from '../types/index'
+import type { Cube, CubeBoard, CubeMessage, CubeReview, CubeStatus, DashboardCommand, DashboardCommandResult, FlowStep, ReviewFinding, ReviewQuiz, ReviewVerdict, Snapshot, SnapshotPlanStep } from '../types/index'
 
 export const CUBE_MAX = 40
 export const CUBE_MAX_MINUTES = 10
@@ -22,7 +22,7 @@ export type CubeSpec = {
   id: string
   title: string
   action: string
-  flow: string[]
+  flow: FlowStep[]
   after: string[]
   doneWhen: string
   files?: string[]
@@ -31,6 +31,39 @@ export type CubeSpec = {
 
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 const strList = (v: unknown) => (Array.isArray(v) ? v.map(x => str(x)).filter(x => x !== '') : [])
+const FLOW_FILE_MAX = 200
+const FLOW_FN_MAX = 120
+const FLOW_DOES_MAX = 200
+const FLOW_CALLS_MAX = 240
+const FLOW_EXAMPLE = '{"file":"hooks/register.tsx","fn":"onPromptSubmit","does":"resets the input gate","calls":"hooks/dashboard.tsx:onPromptSubmit"}'
+
+/** One flow item from tool input. A bare string (boards stored before 0.10) keeps its text in `does` only. */
+export function normalizeFlowStep(v: any): FlowStep {
+  if (typeof v === 'string') return { file: '', fn: '', does: v.trim().slice(0, FLOW_DOES_MAX) }
+  const calls = str(v?.calls).slice(0, FLOW_CALLS_MAX)
+  return {
+    file: str(v?.file).slice(0, FLOW_FILE_MAX),
+    fn: str(v?.fn).slice(0, FLOW_FN_MAX),
+    does: str(v?.does).slice(0, FLOW_DOES_MAX),
+    ...(calls ? { calls } : {}),
+  }
+}
+const flowList = (v: unknown): FlowStep[] => (Array.isArray(v) ? v.map(normalizeFlowStep) : [])
+
+/** Normalizes a stored board for display: string flow items become `{file:'',fn:'',does}`. */
+export function normalizeBoardFlow(board: CubeBoard): CubeBoard {
+  if (!board.cubes.some(c => c.flow.some(f => typeof f === 'string'))) return board
+  return { ...board, cubes: board.cubes.map(c => ({ ...c, flow: c.flow.map(f => (typeof f === 'string' ? normalizeFlowStep(f) : f)) })) }
+}
+
+/** `register.tsx › onPromptSubmit()` or `$ claude plugin test`; the legacy string form is just its text. */
+export function flowLabel(f: FlowStep): string {
+  if (!f.file && !f.fn) return f.does
+  if (['shell', 'browser', 'terminal'].includes(f.file)) return `$ ${f.fn}`
+  const base = f.file.split(/[\/]/).pop() || f.file
+  return `${base} › ${f.fn}${/[()]/.test(f.fn) ? '' : '()'}`
+}
+
 const idList = (v: unknown) => [...new Set(strList(v).map(x => x.toLowerCase()))]
 
 /** Raw tool / command input to a CubeSpec. Missing fields stay empty for the atomic check to name. */
@@ -43,7 +76,7 @@ export function normalizeCube(raw: any, fallbackId = ''): CubeSpec {
     id: (str(raw?.id) || fallbackId).toLowerCase(),
     title: title.slice(0, TITLE_MAX),
     action,
-    flow: strList(raw?.flow),
+    flow: flowList(raw?.flow),
     after: idList(raw?.after),
     doneWhen: str(raw?.doneWhen),
     ...(files.length > 0 ? { files } : {}),
@@ -62,6 +95,11 @@ export function checkAtomic(c: CubeSpec): string | null {
   if (c.flow.length < FLOW_MIN) return `Give cube ${c.id} at least ${FLOW_MIN} flow steps (2-${FLOW_MAX} ordered micro-steps).`
   if (c.flow.length > FLOW_MAX)
     return `${name} is not atomic: its flow has ${c.flow.length} steps (max ${FLOW_MAX}). Split ${c.id} into smaller cubes.`
+  for (let i = 0; i < c.flow.length; i++) {
+    const f = c.flow[i]!
+    if (!f.file || !f.fn || !f.does)
+      return `${name}: flow[${i}] needs file, fn and does — e.g. ${FLOW_EXAMPLE}. Non-code steps use file "shell" and the command as fn.`
+  }
   if (!c.doneWhen) return `${name} has no doneWhen: give a check that proves it is done (a test, a command, a visible result).`
   if (!(c.minutes > 0)) return `${name} needs minutes: a number from 0.5 to ${CUBE_MAX_MINUTES}.`
   if (c.minutes > CUBE_MAX_MINUTES)
@@ -309,6 +347,89 @@ export function askPrompt(c: Cube, text: string): string {
   )
 }
 
+export const REVIEW_TEXT_MAX = 4000
+export const REVIEW_FINDINGS_MAX = 50
+export const REVIEW_QUIZ_MAX = 10
+const VERDICTS: readonly ReviewVerdict[] = ['APPROVE', 'REQUEST_CHANGES', 'NEEDS_INVESTIGATION']
+const SEVERITIES = ['P0', 'P1', 'P2', 'P3'] as const
+const NON_CODE = ['shell', 'browser', 'terminal']
+
+/** Repo files a cube touches: its flow files (code steps only) plus `files`. */
+export function reviewFiles(c: Cube): string[] {
+  const fromFlow = c.flow.map(f => f.file).filter(f => f && !NON_CODE.includes(f))
+  return [...new Set([...fromFlow, ...(c.files ?? [])])]
+}
+
+/** CubeReview: stores the pr-reviewer result on a cube and maps the verdict to a review status. */
+export function reviewCubeResult(board: CubeBoard, input: any, at: number): { board: CubeBoard; message: string } | { error: string } {
+  const id = str(input?.id).toLowerCase()
+  const c = board.cubes.find(x => x.id === id)
+  if (!c) return { error: `no cube ${id || '(id missing)'}` }
+  const verdict = str(input?.verdict).toUpperCase().replace(/[\s-]+/g, '_') as ReviewVerdict
+  if (!VERDICTS.includes(verdict)) return { error: `verdict must be one of ${VERDICTS.join(', ')}` }
+  const summary = str(input?.summary).slice(0, REVIEW_TEXT_MAX)
+  if (!summary) return { error: 'summary is empty: say in plain words what the review found' }
+  const understanding = str(input?.understanding).slice(0, REVIEW_TEXT_MAX)
+  const findings: ReviewFinding[] = []
+  const rawFindings: any[] = Array.isArray(input?.findings) ? input.findings : []
+  for (let i = 0; i < rawFindings.length; i++) {
+    const f = rawFindings[i]
+    const severity = str(f?.severity).toUpperCase()
+    if (!(SEVERITIES as readonly string[]).includes(severity)) return { error: `findings[${i}].severity must be P0, P1, P2 or P3` }
+    const text = str(f?.summary).slice(0, REVIEW_TEXT_MAX)
+    if (!text) return { error: `findings[${i}] needs a summary` }
+    const file = str(f?.file)
+    const line = Number(f?.line)
+    findings.push({
+      severity: severity as ReviewFinding['severity'],
+      ...(file ? { file: file.slice(0, FLOW_FILE_MAX) } : {}),
+      ...(Number.isInteger(line) && line > 0 ? { line } : {}),
+      summary: text,
+    })
+  }
+  const quiz: ReviewQuiz[] = []
+  const rawQuiz: any[] = Array.isArray(input?.quiz) ? input.quiz : []
+  for (let i = 0; i < rawQuiz.length; i++) {
+    const q = rawQuiz[i]
+    const options = strList(q?.options)
+    const answer = Number(q?.answer)
+    if (!str(q?.q) || options.length < 2 || !Number.isInteger(answer) || answer < 0 || answer >= options.length)
+      return { error: `quiz[${i}] needs q, at least 2 options and answer as the 0-based index of the right option` }
+    quiz.push({ q: str(q.q).slice(0, REVIEW_TEXT_MAX), options: options.map(o => o.slice(0, 500)), answer })
+  }
+  const status: CubeReview['status'] = verdict === 'APPROVE' ? 'passed' : verdict === 'REQUEST_CHANGES' ? 'changes' : 'investigate'
+  const review: CubeReview = {
+    status,
+    verdict,
+    summary,
+    ...(understanding ? { understanding } : {}),
+    ...(findings.length ? { findings: findings.slice(0, REVIEW_FINDINGS_MAX) } : {}),
+    ...(quiz.length ? { quiz: quiz.slice(0, REVIEW_QUIZ_MAX) } : {}),
+    at,
+  }
+  // Changes requested: the cube is not done; it goes back to approved so a fix executor can be dispatched.
+  const reopen = status === 'changes' && (c.status === 'done' || c.status === 'failed')
+  const next = setCube(board, id, { review, ...(reopen ? { status: 'approved' as const } : {}) })
+  const blocking = (review.findings ?? []).filter(f => f.severity === 'P0' || f.severity === 'P1').length
+  const message =
+    status === 'passed'
+      ? `review stored for ${id}: APPROVE; the cube may be marked done`
+      : status === 'changes'
+        ? `review stored for ${id}: REQUEST_CHANGES (${blocking} P0/P1 finding${blocking === 1 ? '' : 's'}). The cube is not done: dispatch a task-progress:executor (tag "cubes: ${id}") to fix the P0/P1 findings, then run the review again and call CubeReview.`
+        : `review stored for ${id}: NEEDS_INVESTIGATION; look into the open questions before calling the cube done`
+  return { board: next, message }
+}
+
+/** The prompt that starts a pr-reviewer pass on a cube. */
+export function reviewPrompt(c: Cube): string {
+  const files = reviewFiles(c)
+  return (
+    `[cube review ${c.id} "${c.title}"] Run the pr-reviewer skill on this cube's changes (files: ${files.length ? files.join(', ') : 'see the cube diff'}). ` +
+    `Dispatch it to a task-progress:executor whose prompt tells it to invoke Skill "pr-reviewer" on those files/diff and return verdict, findings (P0-P3 with file:line), ` +
+    `the understanding summary and 3 quiz questions; then call CubeReview with id "${c.id}".`
+  )
+}
+
 export function setCube(board: CubeBoard, id: string, patch: Partial<Cube>): CubeBoard {
   return { ...board, cubes: board.cubes.map(c => (c.id === id ? { ...c, ...patch, id: c.id } : c)) }
 }
@@ -322,8 +443,15 @@ export function releaseReady(board: CubeBoard): { board: CubeBoard; released: Cu
   return { board: next, released: next.cubes.filter(c => ids.includes(c.id)) }
 }
 
+/** The flow as one line for prompts: `1) file:fn does -> calls`. */
+export function flowText(c: Pick<Cube, 'flow'>): string {
+  return c.flow
+    .map((f, i) => (!f.file && !f.fn ? `${i + 1}) ${f.does}` : `${i + 1}) ${f.file}:${f.fn} ${f.does}${f.calls ? ` -> ${f.calls}` : ''}`))
+    .join(' ')
+}
+
 function cubeBrief(board: CubeBoard, c: Cube): string {
-  const flow = c.flow.map((f, i) => `${i + 1}) ${f}`).join(' ')
+  const flow = flowText(c)
   const files = c.files && c.files.length > 0 ? `; files: ${c.files.join(', ')}` : ''
   return `action: ${c.action}; flow: ${flow}; done when: ${c.doneWhen}${files}. Dispatch it with [budget: ${c.minutes}m step: ${stepOf(board, c.id)} cubes: ${c.id}].`
 }
@@ -342,7 +470,7 @@ export function approvalPrompt(board: CubeBoard, cubes: Cube[]): string {
 }
 
 export function changePrompt(c: Cube, note: string): string {
-  const flow = c.flow.map((f, i) => `${i + 1}) ${f}`).join(' ')
+  const flow = flowText(c)
   return (
     `The user wants cube ${c.id} changed: ${note}. Current cube: ${c.id} — ${c.title}; action: ${c.action}; flow: ${flow}; ` +
     `after: ${c.after.length ? c.after.join(', ') : 'none'}; done when: ${c.doneWhen}; minutes: ${c.minutes}` +
@@ -423,7 +551,7 @@ export function planFromBoard(board: CubeBoard): NonNullable<Snapshot['plan']> {
 /** A snapshot with a new board: lanes recomputed, plan mirrored. `null` drops the board. */
 export function withBoard(s: Snapshot, board: CubeBoard | null): Snapshot {
   if (!board) return { ...s, cubes: null }
-  const b = withLanes(board)
+  const b = withLanes(normalizeBoardFlow(board))
   return { ...s, cubes: b, plan: planFromBoard(b) }
 }
 
@@ -557,6 +685,16 @@ export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promis
       d.put(withBoard(d.get(), next))
       await d.submit(askPrompt(c, text), { keepInputCheck: true })
       return ok(`question for cube ${id} sent to Claude`)
+    }
+    case 'cube.review': {
+      const c = board.cubes.find(x => x.id === id)
+      if (!c) return fail(`no cube ${id}`)
+      if (c.status === 'running') return fail(`cube ${id} is still running: review it once its executor reports`)
+      if (c.status !== 'done' && c.status !== 'approved' && c.status !== 'failed') return fail(`cube ${id} is ${c.status}: nothing to review yet`)
+      const next = setCube(board, id, { review: { status: 'running', at: d.now() } })
+      d.put(withBoard(d.get(), next))
+      await d.submit(reviewPrompt(c), { keepInputCheck: true })
+      return ok(`review of cube ${id} sent to Claude`)
     }
     case 'cube.add': {
       const n = Math.max(0, ...board.cubes.map(c => Number(/^c(\d+)$/.exec(c.id)?.[1] ?? 0))) + 1
