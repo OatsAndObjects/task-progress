@@ -131,3 +131,28 @@ test('COMMANDS table rejects unknown actions and keeps existing validation', asy
     s.proc.kill();
   }
 });
+
+test('session.prompt validates text (max 20000); session.stop takes nothing', async () => {
+  const s = await start(7415);
+  try {
+    assert.equal((await post(s, '/api/command', { action: 'session.prompt' })).status, 400);
+    assert.equal((await post(s, '/api/command', { action: 'session.prompt', text: '   ' })).status, 400);
+    assert.equal((await post(s, '/api/command', { action: 'session.prompt', text: 'x'.repeat(20001) })).status, 400);
+    const pending = post(s, '/api/command', { action: 'session.prompt', text: 'hello' });
+    await new Promise((r) => setTimeout(r, 300));
+    const cmd = s.lines.map((l) => JSON.parse(l)).find((o) => o.type === 'command' && o.action === 'session.prompt');
+    assert.deepEqual(cmd.args, { text: 'hello' });
+    await post(s, '/api/result', { id: cmd.id, ok: true, message: 'sent', data: { state: 'queued' } });
+    const reply = await (await pending).json();
+    assert.equal(reply.ok, true);
+    assert.deepEqual(reply.data, { state: 'queued' });
+    const stop = post(s, '/api/command', { action: 'session.stop' });
+    await new Promise((r) => setTimeout(r, 300));
+    const sc = s.lines.map((l) => JSON.parse(l)).find((o) => o.type === 'command' && o.action === 'session.stop');
+    assert.ok(sc);
+    await post(s, '/api/result', { id: sc.id, ok: false, message: 'Nothing is running' });
+    assert.equal((await (await stop).json()).ok, false);
+  } finally {
+    s.proc.kill();
+  }
+});

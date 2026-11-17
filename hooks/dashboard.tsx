@@ -37,6 +37,7 @@ import {
 } from './dashboard-model'
 import { seedHistory } from './dash-mirror'
 import { filesDeps, runFileCommand } from './dash-files'
+import { onSessionTurnComplete, runSessionCommand, sessionState } from './dash-session'
 import { answerCube, applyReview, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviseCube, withBoard } from './cubes-model'
 import type { CubeBoard } from '../types/index'
 
@@ -230,6 +231,27 @@ function deps($: any, nowMs: number): CommandDeps {
 
 /** One command from the pane or the web app. */
 async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandResult> {
+  if (typeof cmd.action === 'string' && cmd.action.startsWith('session.')) {
+    const sr = await runSessionCommand(cmd as any, {
+      submit: async (text: string) => {
+        const out: any = await $.prompt.submit({ text, asUser: true })
+        if (out && typeof out.deny === 'string') throw new Error(out.deny)
+      },
+      abort: async (turnId: string) => {
+        await $.turn.abort({ turnId })
+      },
+      postEvent: async (ev: Record<string, unknown>) => {
+        const w = c.web
+        if (!w) return
+        await $.http.fetch(`http://127.0.0.1:${w.port}/api/events`, {
+          method: 'POST',
+          headers: { 'X-TP-Token': w.token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(ev),
+        })
+      },
+    })
+    if (sr) return sr
+  }
   if (typeof cmd.action === 'string' && cmd.action.startsWith('file.')) {
     const fr = await runFileCommand(cmd as any, await filesDeps($))
     if (fr) return fr
@@ -453,6 +475,7 @@ export async function onAgentSpawn($: any, e: any, out: any) {
 }
 
 export async function onTurnComplete($: any, e: any) {
+  onSessionTurnComplete(sessionState, e)
   if (e.usage) {
     const at: number = await $.clock.now()
     await mutate($, s => attributeTurn(addTurnUsage(s, e.usage, at), { agentId: e.agentId, model: e.usage?.model, usage: e.usage }))

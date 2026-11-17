@@ -273,6 +273,10 @@ const COMMANDS = {
   'prompt.send': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
   'orchestrate.set': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
 
+  // ---- session: a prompt typed on the web, and Stop for the running turn ----
+  'session.prompt': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
+  'session.stop': () => ({ args: {} }),
+
   // ---- files (read / diff / open in an editor); the mod confines paths to the session cwd ----
   'file.read': (a) => (isText(a.path, 1024) ? { args: { path: a.path } } : { error: 'path required (max 1024 chars)' }),
   'file.diff': (a) => (isText(a.path, 1024) ? { args: { path: a.path } } : { error: 'path required (max 1024 chars)' }),

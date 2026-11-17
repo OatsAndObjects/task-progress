@@ -2,6 +2,7 @@
 // /api/events per batch (the page receives each event through TP.emit). Everything here
 // is fire-and-forget; a failing POST never breaks a turn.
 import { parseBudget } from './dashboard-model'
+import { onSessionTurnStart, sessionState } from './dash-session'
 
 export const CHUNK_MS = 150
 export const HISTORY_MAX = 300
@@ -237,6 +238,7 @@ export function registerMirror(on: any, web: () => WebTarget | null): void {
 
   on('turn.start', async ($: any, e: any, next: any) => {
     remember($)
+    onSessionTurnStart(sessionState, e) // the web Stop button aborts this turn id
     if (!e.agentId) mirror.turnStart(String(e.text ?? ''))
     return next(e)
   })
