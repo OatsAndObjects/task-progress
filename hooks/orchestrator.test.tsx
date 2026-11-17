@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { GATED_TOOLS, budgetDecision, formatCountdown, parseBudget, parseModeArg } from './register'
+import { GATED_TOOLS, answered, budgetDecision, formatCountdown, parseBudget, parseModeArg } from './register'
 
 const INPUTS = 'mcp__task-progress__TaskInputs'
 const PLAN = 'mcp__task-progress__TaskPlan'
@@ -122,25 +122,26 @@ test('dispatch without a budget tag is denied; with one it is allowed', async ($
   expect(yes.deny).toBeUndefined()
 })
 
+// A 2 min budget: the 120 ms ticker runs once per mocked tick, so a 10 min budget (5000 ticks) sometimes exceeded the 5 s test limit.
 test('executor time budget: allow, wrap-up notice once at 80%, deny at 100%', async ($, on) => {
   const { clock, call, dispatch, start } = setup($, on)
   await start()
-  await dispatch(10, 2)
+  await dispatch(2, 2)
   expect((await call('Bash', { command: 'ls', agentId: 'a1' })).deny).toBeUndefined()
-  await clock.advance(7 * MIN)
+  await clock.advance(1.4 * MIN)
   const early = await call('Bash', { command: 'ls', agentId: 'a1' })
   expect(early.deny).toBeUndefined()
   expect(early.context).toBeUndefined()
-  await clock.advance(1.5 * MIN) // 8.5 of 10 minutes
+  await clock.advance(0.3 * MIN) // 102 s of 120 s
   const warn = await call('Bash', { command: 'ls', agentId: 'a1' })
   expect(warn.deny).toBeUndefined()
   expect(String(warn.context?.[0])).toContain('wrap up')
-  expect(String(warn.context?.[0])).toContain('2 min left')
+  expect(String(warn.context?.[0])).toContain('1 min left')
   const again = await call('Bash', { command: 'ls', agentId: 'a1' })
   expect(again.context).toBeUndefined() // not repeated
-  await clock.advance(1.5 * MIN) // over
+  await clock.advance(0.3 * MIN) // over
   const over = await call('Bash', { command: 'ls', agentId: 'a1' })
-  expect(over.deny).toBe('Time budget of 10 min exceeded: stop now and return your report to the orchestrator.')
+  expect(over.deny).toBe('Time budget of 2 min exceeded: stop now and return your report to the orchestrator.')
   expect((await call('Read', { file_path: '/x', agentId: 'a1' })).deny).toContain('Time budget')
   // TaskProgress is the one exception, and other agents keep their own clocks.
   expect((await call(PROGRESS, { task: 'T', totalSteps: 1, step: 0, agentId: 'a1' })).deny).toBeUndefined()
@@ -308,4 +309,25 @@ test('CubeReview passes the input gate, stores the review and is registered', as
   expect(bad.deny).toBeUndefined()
   expect(String(bad.result)).toContain('review not stored')
   expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
+})
+
+test('CubeReview with a long payload, and a failing handler, still return a result', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await call(INPUTS, { inputs: [], asked: false })
+  await call(PLAN, { task: 'T', cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }] })
+  const long = 'x'.repeat(5000)
+  const quiz = Array.from({ length: 5 }, (_, i) => ({ q: `q${i} ${long}`, options: ['a', 'b', 'c', 'd'], answer: 1 }))
+  const findings = Array.from({ length: 20 }, (_, i) => ({ severity: 'P2', file: 'a.ts', line: i + 1, summary: long }))
+  const ok = await call('mcp__task-progress__CubeReview', { id: 'c1', verdict: 'APPROVE', summary: long, understanding: long, findings, quiz })
+  expect(String(ok.result)).toContain('review stored for c1')
+})
+
+test('a cube tool handler that throws still answers with a result', async () => {
+  expect((await answered(async () => 'fine')).result).toBe('fine')
+  const r = await answered(async () => {
+    throw new Error('boom')
+  })
+  expect(r.result).toContain('boom')
+  expect(r.result).toContain('Do not repeat the call')
 })

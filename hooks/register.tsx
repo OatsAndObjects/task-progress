@@ -293,6 +293,15 @@ function toInt(v: unknown, fallback: number): number {
 }
 
 /** Dashboard bookkeeping never breaks the hook it rides on. */
+/** A cube tool must always answer: a throw after the board was stored would leave the call with no result. */
+export async function answered(run: () => Promise<string>): Promise<{ result: string }> {
+  try {
+    return { result: await run() }
+  } catch (err) {
+    return { result: `the change may already be stored, but finishing it failed: ${String((err as any)?.message ?? err).slice(0, 200)}. Do not repeat the call; check /tp-cubes status.` }
+  }
+}
+
 async function quiet(p: Promise<unknown> | undefined): Promise<void> {
   try {
     await p
@@ -715,24 +724,28 @@ export const register: Register = on => {
     }
   })
 
-  on('tool.call', { tool: CUBE_TOOL }, async ($, e, next) => {
-    const r = await dashReviseCube($, e)
-    return {
-      result: r.ok
+  on('tool.call', { tool: CUBE_TOOL }, async ($, e, next) =>
+    answered(async () => {
+      const r = await dashReviseCube($, e)
+      return r.ok
         ? `${r.message}. It is back with the user as proposed; STOP and wait for the approval prompt.`
-        : `cube not revised: ${r.message}`,
-    }
-  })
+        : `cube not revised: ${r.message}`
+    }),
+  )
 
-  on('tool.call', { tool: ANSWER_TOOL }, async ($, e, next) => {
-    const r = await dashAnswerCube($, e)
-    return { result: r.ok ? `${r.message}. Nothing else changed; do not act on the cube.` : `answer not posted: ${r.message}` }
-  })
+  on('tool.call', { tool: ANSWER_TOOL }, async ($, e, next) =>
+    answered(async () => {
+      const r = await dashAnswerCube($, e)
+      return r.ok ? `${r.message}. Nothing else changed; do not act on the cube.` : `answer not posted: ${r.message}`
+    }),
+  )
 
-  on('tool.call', { tool: REVIEW_TOOL }, async ($, e, next) => {
-    const r = await dashReviewCube($, e)
-    return { result: r.ok ? `${r.message}.` : `review not stored: ${r.message}` }
-  })
+  on('tool.call', { tool: REVIEW_TOOL }, async ($, e, next) =>
+    answered(async () => {
+      const r = await dashReviewCube($, e)
+      return r.ok ? `${r.message}.` : `review not stored: ${r.message}`
+    }),
+  )
 
   on('command.run', { command: 'tp-cubes' }, async ($, e) => {
     const a = String(e.args ?? '').trim().toLowerCase()
