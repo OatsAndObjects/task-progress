@@ -440,9 +440,19 @@ const events = [];
 let nextSeq = 1;
 const streamClients = new Set();
 
+const EVENT_MAX_BYTES = 64 * 1024; // one event
+const RING_MAX_BYTES = 32 * 1024 * 1024; // whole ring
+const CLIENT_BACKLOG_MAX = 2 * 1024 * 1024; // a stream client this far behind is dropped (EventSource replays)
+const eventSizes = []; // bytes per ring entry, parallel to `events`
+let ringBytes = 0;
+
 function writeTo(set, res, frame) {
   try {
     res.write(frame);
+    if (set === streamClients && res.writableLength > CLIENT_BACKLOG_MAX) {
+      set.delete(res);
+      res.destroy(); // end() would wait for the backlog; EventSource reconnects and replays
+    }
   } catch {
     set.delete(res);
   }
@@ -457,11 +467,21 @@ function addEvents(list) {
   for (const raw of list) {
     const ev = { ...raw, seq: nextSeq++ };
     if (typeof ev.ts !== 'number') ev.ts = Date.now();
+    const size = Buffer.byteLength(JSON.stringify(ev));
     events.push(ev);
+    eventSizes.push(size);
+    ringBytes += size;
     added.push(ev);
   }
-  if (events.length > EVENT_MAX) events.splice(0, events.length - EVENT_MAX);
-  for (const res of streamClients) for (const ev of added) writeTo(streamClients, res, eventFrame(ev));
+  let drop = events.length > EVENT_MAX ? events.length - EVENT_MAX : 0;
+  let bytes = ringBytes;
+  for (let i = 0; i < drop; i++) bytes -= eventSizes[i];
+  while (bytes > RING_MAX_BYTES && drop < events.length - 1) bytes -= eventSizes[drop++];
+  if (drop > 0) {
+    events.splice(0, drop);
+    for (const n of eventSizes.splice(0, drop)) ringBytes -= n;
+  }
+  for (const res of [...streamClients]) for (const ev of added) if (streamClients.has(res)) writeTo(streamClients, res, eventFrame(ev));
   return added;
 }
 
@@ -505,8 +525,11 @@ async function handleEvents(req, res) {
   if (!list.every((e) => e && typeof e === 'object' && !Array.isArray(e))) {
     return sendJson(res, 400, { ok: false, message: 'each event must be a JSON object' });
   }
-  const added = addEvents(list);
-  return sendJson(res, 200, { ok: true, seq: added[added.length - 1].seq });
+  const fit = list.filter((e) => Buffer.byteLength(JSON.stringify(e)) <= EVENT_MAX_BYTES);
+  const dropped = list.length - fit.length;
+  if (!fit.length) return sendJson(res, 400, { ok: false, message: `event too large (max ${EVENT_MAX_BYTES} bytes)`, dropped });
+  const added = addEvents(fit);
+  return sendJson(res, 200, { ok: true, seq: added[added.length - 1].seq, dropped });
 }
 
 // GET /api/stream?t=<token>[&since=<seq>]: Server-Sent Events. Token already checked (query param allowed).
@@ -525,6 +548,7 @@ function handleStream(req, res, url) {
   if (latestSnapshot) res.write(`event: snapshot\ndata: ${latestSnapshot}\n\n`);
   for (const ev of events) if (ev.seq > since) res.write(eventFrame(ev));
   streamClients.add(res);
+  res.on('error', () => streamClients.delete(res));
   req.on('close', () => streamClients.delete(res));
 }
 

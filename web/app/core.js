@@ -180,7 +180,11 @@ TP.connect = function () {
   es.onmessage = function (m) {
     var ev;
     try { ev = JSON.parse(m.data); } catch (e) { return; }
-    if (typeof ev.seq === 'number') TP.lastSeq = ev.seq; // EventSource resends it as Last-Event-ID
+    if (typeof ev.seq === 'number') {
+      if (ev.seq < TP.lastSeq) TP.events.length = 0; // server restarted: seq began again, drop the stale replay buffer
+      TP.lastSeq = ev.seq;
+    }
+    // EventSource resends lastSeq as Last-Event-ID
     TP.emit(ev);
   };
   es.onerror = function () {

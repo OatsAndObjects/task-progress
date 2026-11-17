@@ -86,7 +86,7 @@ test('file.diff diffs tracked files and shows untracked ones as added', async ()
   const r = await fileDiff(d, 't.txt')
   expect(r.ok).toBe(true)
   expect((r.data as any).diff).toBe('DIFF')
-  expect(seen[1]).toEqual([GIT, '-C', 'C:\\proj\\app', 'diff', '--no-index', '--', '/dev/null', 't.txt'])
+  expect(seen[1]).toEqual([GIT, '-C', 'C:\\proj\\app', 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--', '/dev/null', 't.txt'])
   expect((await fileDiff(d, '../x')).ok).toBe(false)
 })
 
@@ -105,7 +105,7 @@ test('file.open validates, confines, and spawns the editor', async () => {
   expect(d.calls.length).toBe(0)
   const r = await fileOpen(d, 'a.ts', 'vscode', 3)
   expect(r.ok).toBe(true)
-  expect(d.calls[0]).toEqual([CODE, '-g', 'C:\\proj\\app\\a.ts:3'])
+  expect(d.calls[0]).toEqual(['C:\\Windows\\System32\\cmd.exe', '/d', '/c', CODE, '-g', 'C:\\proj\\app\\a.ts:3'])
   const s = deps({ exists: async (p: string) => p.endsWith('studio64.exe') }, { 'C:/proj/app/a.ts': 'x' })
   expect((await fileOpen(s, 'a.ts', 'studio', 9)).ok).toBe(true)
   expect(s.calls[0]).toEqual(['C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe', '--line', '9', 'C:\\proj\\app\\a.ts'])
@@ -171,4 +171,38 @@ test('editors launch from a neutral directory, never the project', async () => {
   await fileOpen(d, 'a.ts', 'vscode', 3)
   expect(d.cwds[0]).toBe('C:\\Users\\u')
   expect(d.cwds.includes('C:\\proj\\app')).toBe(false)
+})
+
+test('where.exe: extensionless shims are skipped and .exe beats .cmd', async () => {
+  const mk = (out: string) => deps({ run: async () => ({ exitCode: 0, stdout: out, stderr: '' }) })
+  const C = 'C:\\Program Files\\Microsoft VS Code\\bin\\'
+  expect(await resolveExe(mk(`${C}code\r\n${C}code.cmd\r\n`), 'code')).toBe(`${C}code.cmd`)
+  expect(await resolveExe(mk(`${C}code\r\n${C}code.cmd\r\nC:\\x\\code.exe\r\n`), 'code')).toBe('C:\\x\\code.exe')
+  expect(await resolveExe(mk(`${C}code\r\n`), 'code')).toBeNull()
+})
+
+test('a .cmd editor goes through cmd.exe /c; metacharacters in the path are refused', async () => {
+  const d = deps({}, { 'C:/proj/app/a.ts': 'x' })
+  expect((await fileOpen(d, 'a.ts', 'vscode', 3)).ok).toBe(true)
+  expect(d.calls[0]).toEqual(['C:\\Windows\\System32\\cmd.exe', '/d', '/c', CODE, '-g', 'C:\\proj\\app\\a.ts:3'])
+  const evil = deps({ cwd: 'C:\\proj\\a&b' }, { 'C:/proj/a&b/a.ts': 'x' })
+  evil.stat = async (p: string) => (p === 'C:/proj/a&b' ? { kind: 'dir', size: 0, realPath: 'C:\\proj\\a&b' } : { kind: 'file', size: 1, realPath: p.replace(/\//g, '\\') })
+  const r = await fileOpen(evil, 'a.ts', 'vscode', 1)
+  expect(r.ok).toBe(false)
+  expect(evil.calls).toEqual([])
+})
+
+test('exe cache is per project and name; misses are not cached', async () => {
+  const cache = new Map<string, string | null>()
+  let n = 0
+  let out = ''
+  const run = async () => (n++, { exitCode: 0, stdout: out, stderr: '' })
+  await resolveExe(deps({ exeCache: cache, run }), 'code') // miss
+  out = 'C:\\real\\code.exe\r\n'
+  expect(await resolveExe(deps({ exeCache: cache, run }), 'code')).toBe('C:\\real\\code.exe')
+  expect(n).toBe(2)
+  await resolveExe(deps({ exeCache: cache, run }), 'code')
+  expect(n).toBe(2)
+  await resolveExe(deps({ exeCache: cache, run, cwd: 'C:\\other' }), 'code')
+  expect(n).toBe(3)
 })

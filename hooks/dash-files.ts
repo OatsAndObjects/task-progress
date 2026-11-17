@@ -123,7 +123,8 @@ const WHERE = 'C:\\Windows\\System32\\where.exe'
  * planted executable in the repo can never be launched.
  */
 export async function resolveExe(d: FileDeps, name: string): Promise<string | null> {
-  const cached = d.exeCache?.get(name)
+  const ckey = `${d.cwd}|${name}`
+  const cached = d.exeCache?.get(ckey)
   if (cached !== undefined) return cached
   let found: string | null = null
   try {
@@ -131,20 +132,27 @@ export async function resolveExe(d: FileDeps, name: string): Promise<string | nu
     const r = await d.run(argv, { cwd: d.env.neutralDir, timeoutMs: 10000 })
     if (r.exitCode === 0) {
       const proj = trimEnd(slash(d.cwd))
+      let any: string | null = null
       for (const line of r.stdout.split(/\r?\n/)) {
         const p = line.trim()
         if (!p || p.includes('\0')) continue
         const abs = d.isWindows ? /^[A-Za-z]:[\\/]/.test(p) : p.startsWith('/')
         if (!abs) continue
         if (inside(slash(p), proj, d.isWindows)) continue
-        found = p
-        break
+        // Windows: extensionless shims (VS Code's `code` sh script) are listed first but cannot be launched
+        if (d.isWindows && !/\.(exe|cmd|bat|com)$/i.test(p)) continue
+        if (!d.isWindows || /\.(exe|com)$/i.test(p)) {
+          found = p
+          break
+        }
+        any = any ?? p // a .cmd/.bat: used only when no .exe is listed
       }
+      if (found === null) found = any
     }
   } catch {
     found = null
   }
-  d.exeCache?.set(name, found)
+  if (found !== null) d.exeCache?.set(ckey, found)
   return found
 }
 
@@ -158,8 +166,8 @@ export async function fileDiff(d: FileDeps, input: unknown): Promise<FileResult>
   try {
     const tracked = await git(['ls-files', '--error-unmatch', '--', r.rel])
     let out: { exitCode: number; stdout: string; stderr: string }
-    if (tracked.exitCode === 0) out = await git(['diff', '--', r.rel])
-    else out = await git(['diff', '--no-index', '--', '/dev/null', r.rel]) // exit 1 = differences
+    if (tracked.exitCode === 0) out = await git(['diff', '--no-ext-diff', '--no-textconv', '--', r.rel])
+    else out = await git(['diff', '--no-index', '--no-ext-diff', '--no-textconv', '--', '/dev/null', r.rel]) // exit 1 = differences
     if (out.exitCode > 1) return fail(out.stderr.trim() || 'git diff failed')
     const c = capText(out.stdout)
     return { ok: true, message: c.truncated ? 'truncated at 500 KB' : out.stdout ? 'diff' : 'no changes', data: { diff: c.text } }
@@ -209,7 +217,15 @@ export async function fileOpen(d: FileDeps, input: unknown, editor: unknown, lin
       lastErr = `${cand} not found`
       continue
     }
-    const argv = editorArgv(editor, exe, abs, n)
+    let argv = editorArgv(editor, exe, abs, n)
+    if (d.isWindows && /\.(cmd|bat)$/i.test(exe)) {
+      // batch files need cmd.exe; refuse anything cmd would interpret
+      if (argv.some(a => /[&^%"<>|]/.test(a))) {
+        lastErr = `${cand} path has characters that are unsafe for cmd.exe`
+        continue
+      }
+      argv = ['C:\\Windows\\System32\\cmd.exe', '/d', '/c', ...argv]
+    }
     // The launcher may keep running with the editor; success is "started and did not fail fast".
     // cwd is never the project dir: bare names resolve against cwd first on Windows
     const run = d.run(argv, { cwd: d.env.neutralDir, timeoutMs: 600000 }).then(

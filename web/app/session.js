@@ -2,7 +2,7 @@
 // Screen: session. Chat column (bubbles, tool/executor/permission/waiting cards, composer) + plan panel.
 (function () {
   var built = false, root, chat, thread, msg, qbadge, panelEl, stick = true;
-  var running = false, cur = null, tools = {}, execs = {}, perms = {}, seen = [];
+  var running = false, cur = null, tools = {}, toolIn = {}, execs = {}, perms = {}, seen = [], pending = [];
   var lastState = null, panelOff = false;
 
   var CSS = '' +
@@ -151,6 +151,7 @@
     var b = div('ub'); b.textContent = t;
     if (queued) b.insertAdjacentHTML('beforeend', '<br><span class="qb">queued: runs when Claude is idle</span>');
     stick = true; clearEmpty(); add(b); cur = null;
+    pending.push({ el: b, text: t, at: Date.now() }); // the mirrored {type:'user'} attaches to this bubble
     msg.value = ''; badge();
     TP.send('session.prompt', { text: t }).then(function (r) { if (r && !r.ok) b.insertAdjacentHTML('beforeend', '<br><span class="qb">not sent</span>'); });
   }
@@ -220,17 +221,27 @@
       else add(claudeMsg(md(e.text || '')));
       scroll(); return;
     }
+    if (t === 'history.reset') {
+      chat.innerHTML = ''; tools = {}; toolIn = {}; execs = {}; perms = {}; pending = []; seen = [];
+      cur = null; running = false; badge();
+      return;
+    }
     if (t === 'turn.start') { endStream(); running = true; badge(); return; }
     if (t === 'turn.end') { endStream(); running = false; badge(); return; }
     if (t === 'user') {
       endStream(); clearEmpty();
+      var now = Date.now();
+      pending = pending.filter(function (q) { return now - q.at < 60000; });
+      for (var qi = 0; qi < pending.length; qi++) {
+        if (pending[qi].text === String(e.text || '').trim()) { pending.splice(qi, 1); return; }
+      }
       var b = div('ub'); b.textContent = e.text || ''; add(b); return;
     }
     if (t === 'tool.start') {
       endStream(); clearEmpty();
       var d = document.createElement('details'); d.className = 'tc run';
       d.innerHTML = '<summary><span class="tool">' + esc(e.tool) + '</span><span class="sum">' + esc(e.summary) + '</span><span class="chev">&#9656;</span></summary><div class="io">' + toolHtml(e) + '</div>';
-      tools[e.id] = d;
+      tools[e.id] = d; toolIn[e.id] = e.input;
       var wrap = div('cm', '<div class="av c" style="visibility:hidden"></div><div class="body"></div>');
       wrap.querySelector('.body').appendChild(d); add(wrap); return;
     }
@@ -238,7 +249,7 @@
       var c = tools[e.id]; if (!c) return;
       c.classList.remove('run'); if (e.ok === false) c.classList.add('err');
       if (e.summary) c.querySelector('.sum').textContent = (c.querySelector('.sum').textContent + ' (' + e.summary + ')');
-      c.querySelector('.io').innerHTML = toolHtml({ input: e.input, output: e.output || e.summary });
+      c.querySelector('.io').innerHTML = toolHtml({ input: e.input != null ? e.input : toolIn[e.id], output: e.output || e.summary });
       return;
     }
     if (t === 'executor') {
@@ -260,7 +271,13 @@
         '<div class="acts"><button class="btn pri" data-id="' + esc(e.id) + '" data-d="allow">Allow once</button><button class="btn" data-id="' + esc(e.id) + '" data-d="allowAlways">Always allow</button><button class="btn danger" data-id="' + esc(e.id) + '" data-d="deny">Deny</button></div>');
       perms[e.id] = { el: p, done: false }; add(p); return;
     }
-    if ((t === 'permission.answered' || t === 'permission.resolved') && perms[e.id] && !perms[e.id].done) { perms[e.id].done = true; perms[e.id].el.classList.add('done'); perms[e.id].el.querySelector('.acts').innerHTML = '<span class="chip">' + (e.by === 'terminal' || e.by === 'timeout' ? 'Answer it in the terminal' : 'Answered elsewhere') + '</span>'; return; }
+    if ((t === 'permission.answered' || t === 'permission.resolved') && perms[e.id] && !perms[e.id].done) {
+      perms[e.id].done = true; perms[e.id].el.classList.add('done');
+      var dec = e.decision, lbl = e.by === 'terminal' || e.by === 'timeout' || dec === 'ask' ? 'Answer it in the terminal'
+        : dec === 'deny' ? 'Denied' : dec === 'allow' || dec === 'allowAlways' ? 'Allowed' : 'Answered elsewhere';
+      perms[e.id].el.querySelector('.acts').innerHTML = '<span class="chip ' + (dec === 'deny' ? 'bad' : dec === 'allow' || dec === 'allowAlways' ? 'ok' : '') + '">' + lbl + '</span>';
+      return;
+    }
     if (t === 'waiting') {
       endStream(); clearEmpty();
       add(div('ask', '<div class="ic">!</div><div><h4>Waiting in the terminal</h4><p class="muted" style="font-size:14.5px">Claude asked you a question: <b>' + esc(e.question) + '</b><br>This kind of question can only be answered in the terminal window. Switch to it, pick an answer, and this page will carry on by itself.</p></div>'));
