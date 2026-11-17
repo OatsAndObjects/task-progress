@@ -17,7 +17,7 @@
   }
   function inWords(t) {
     var ms = new Date(t) - Date.now(); if (isNaN(ms)) return '';
-    if (ms <= 0) return 'now';
+    if (ms <= 0) return '';
     var m = Math.round(ms / 60000);
     if (m < 60) return m + ' min';
     var h = Math.floor(m / 60);
@@ -50,7 +50,21 @@
     '#screen-usage .wide{margin-top:var(--s4)}',
     '#screen-usage .spk{width:100%;height:110px;display:block}',
     '#screen-usage .upd{color:var(--faint);font-size:12.5px;margin-top:var(--s2)}',
-    '#usage-breakdown{margin-top:var(--s4)}'
+    '#usage-breakdown{margin-top:var(--s4)}',
+    '#usage-breakdown .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:var(--s3) 0}',
+    '#usage-breakdown .tabs button{background:var(--surface-3);color:var(--muted);border:0;border-radius:999px;padding:7px 14px;font:inherit;font-size:14px;cursor:pointer}',
+    '#usage-breakdown .tabs button.on{background:var(--accent-soft);color:var(--text)}',
+    '#usage-breakdown .why{font-size:15px;margin:0 0 var(--s3)}',
+    '#usage-breakdown .bk{display:grid;grid-template-columns:minmax(90px,200px) 1fr auto;gap:12px;align-items:center;padding:6px 0;font-size:14px}',
+    '#usage-breakdown .bk .l{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '#usage-breakdown .bk .t{height:10px;border-radius:5px;background:var(--surface-3);overflow:hidden}',
+    '#usage-breakdown .bk .t i{display:block;height:100%;border-radius:5px;background:var(--shimmer)}',
+    '#usage-breakdown .bk .v{font:600 13px var(--mono);text-align:right;white-space:nowrap}',
+    '#usage-breakdown .bk .v span{color:var(--muted);font-weight:400;margin-left:8px}',
+    '#usage-breakdown .tool{display:grid;grid-template-columns:70px 1fr auto;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}',
+    '#usage-breakdown .tool:last-child{border-bottom:0}',
+    '#usage-breakdown .tool .g{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-family:var(--mono);font-size:13px}',
+    '#usage-breakdown .tool .v{font:600 13px var(--mono)}'
   ].join('\n');
   function injectCss() {
     if (document.getElementById('css-usage')) return;
@@ -63,7 +77,7 @@
       '<circle cx="' + sz / 2 + '" cy="' + sz / 2 + '" r="' + r + '" fill="none" stroke="' + col + '" stroke-width="' + sw + '" stroke-linecap="round" stroke-dasharray="' + (c * v / 100).toFixed(1) + ' ' + c.toFixed(1) + '"/></svg>';
   }
   function meter(title, p, col, big, sub) {
-    p = Math.round(+p || 0);
+    p = Math.max(0, Math.min(100, Math.round(+p || 0)));
     return '<div class="card um"><div class="rg" role="img" aria-label="' + esc(title) + ' ' + p + ' percent">' + ring(p, colour(p) || col) + '<b>' + p + '%</b></div>' +
       '<div><h3>' + esc(title) + '</h3><div class="big">' + esc(big) + '</div><p>' + esc(sub) + '</p></div></div>';
   }
@@ -80,10 +94,11 @@
     var cx = u.context || {}, fh = u.fiveHour || {}, wk = u.weekly || {}, tk = u.tokens || {}, cost = u.cost || {};
     var cp = Math.round(+cx.percent || 0), fp = Math.round(+fh.percent || 0), wp = Math.round(+wk.percent || 0);
     var ctxHint = cp >= 90 ? 'Context is ' + cp + '% full. It will be compacted soon.' : cp >= 70 ? 'Context is ' + cp + '% full. Getting tight.' : 'Context is ' + cp + '% full. Plenty of room.';
-    var fhSub = fh.resetsAt ? 'Resets ' + clock(fh.resetsAt) + ', in ' + inWords(fh.resetsAt) + '.' : 'Counts everything you ran in the last 5 hours.';
-    var wkSub = wk.resetsAt ? 'Resets ' + clock(wk.resetsAt) + ', in ' + inWords(wk.resetsAt) + '.' : 'Used ' + wp + '% so far this week.';
+    function rs(t) { var w = inWords(t); return w ? 'Resets ' + clock(t) + ', in ' + w + '.' : 'Resets soon.'; }
+    var fhSub = fh.resetsAt ? rs(fh.resetsAt) : 'Counts everything you ran in the last 5 hours.';
+    var wkSub = wk.resetsAt ? rs(wk.resetsAt) : 'Used ' + wp + '% so far this week.';
     var big = {
-      c: cx.tokens != null ? num(cx.tokens) + ' of ' + num(cx.window) + ' tokens' : cp + '% used',
+      c: cx.tokens != null ? num(cx.tokens) + (+cx.window ? ' of ' + num(cx.window) : '') + ' tokens' : cp + '% used',
       f: fh.resetsAt ? 'resets ' + clock(fh.resetsAt) : fp + '% used',
       w: wk.resetsAt ? 'resets ' + clock(wk.resetsAt) : wp + '% used'
     };
@@ -91,7 +106,7 @@
     var rows = [['Input', tk.input, 'var(--shimmer)'], ['Output', tk.output, 'var(--star)'], ['Cache read', tk.cacheRead, 'var(--ok)'], ['Cache write', tk.cacheWrite, 'var(--warn)']];
     var per = u.perTurn && u.perTurn.length ? u.perTurn : (u.sparkline || []);
     var hints = ['<p>' + esc(ctxHint) + '</p>'];
-    hints.push('<p>You have used ' + wp + '% of this week' + (wk.resetsAt ? '. It resets ' + esc(clock(wk.resetsAt)) + ', in ' + esc(inWords(wk.resetsAt)) : '') + '.</p>');
+    hints.push('<p>You have used ' + wp + '% of this week' + (wk.resetsAt ? (inWords(wk.resetsAt) ? '. It resets ' + esc(clock(wk.resetsAt)) + ', in ' + esc(inWords(wk.resetsAt)) : '. It resets soon') : '') + '.</p>');
     if (fp >= 75) hints.push('<p>The 5-hour limit is ' + fp + '% used. Slow down or wait for it to reset.</p>');
     return '<div class="ugrid">' +
       meter('Context window', cp, 'var(--shimmer)', big.c, 'Claude ' + (cp < 70 ? 'still has plenty of room in this chat.' : 'is running low on room in this chat.')) +
@@ -100,11 +115,53 @@
       '<div class="row2"><div class="card"><h3>Session tokens</h3><div class="big" style="font-size:22px;font-weight:700;margin-top:6px">' + esc(num(total)) + ' total</div>' +
       '<div class="stack">' + rows.map(function (r) { return '<i style="flex:' + Math.max(0.5, +r[1] || 0) + ';background:' + r[2] + '"></i>'; }).join('') + '</div>' +
       '<table class="tbl"><tbody>' + rows.map(function (r) { return '<tr><td><i style="background:' + r[2] + '"></i>' + esc(r[0]) + '</td><td>' + esc(num(r[1])) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
-      '<div class="card"><h3>Cost this session</h3><div class="cost">' + (cost.usd != null ? '$' + (+cost.usd).toFixed(2) : 'n/a') + '</div><p class="muted" style="font-size:14px">Estimated from the tokens above at list prices.</p>' +
-      (u.updatedAt ? '<p class="upd">Updated ' + esc(new Date(u.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) + '</p>' : '') + '</div></div>' +
+      '<div class="card"><h3>Cost this session</h3><div class="cost">' + (cost.usd != null && isFinite(+cost.usd) ? '$' + (+cost.usd).toFixed(2) : 'n/a') + '</div><p class="muted" style="font-size:14px">Estimated from the tokens above at list prices.</p>' +
+      (u.updatedAt && !isNaN(new Date(u.updatedAt)) ? '<p class="upd">Updated ' + esc(new Date(u.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) + '</p>' : '') + '</div></div>' +
       '<div class="card wide"><h3>Tokens per turn <span class="faint" style="font-weight:400;font-size:13px">last ' + Math.min(20, per.length) + ' turns</span></h3>' + spark(per.slice(-20)) + '</div>' +
       '<div class="hint">' + hints.join('') + '</div>';
   }
+
+  var TABS = [['byCube', 'By cube'], ['byAgent', 'By agent'], ['byModel', 'By model'], ['context', 'Context']];
+  var tab = 'byCube', lastBd = '', lastState = null;
+  function shares(vals) { // largest-remainder: whole percents summing to exactly 100
+    var tot = vals.reduce(function (a, b) { return a + b; }, 0); if (!tot) return vals.map(function () { return 0; });
+    var raw = vals.map(function (v) { return v / tot * 100; }), fl = raw.map(Math.floor);
+    var left = 100 - fl.reduce(function (a, b) { return a + b; }, 0);
+    raw.map(function (r, i) { return [r - fl[i], i]; }).sort(function (a, b) { return b[0] - a[0] || a[1] - b[1]; }).slice(0, left).forEach(function (x) { fl[x[1]]++; });
+    return fl;
+  }
+  function rank(list) {
+    var rows = (Array.isArray(list) ? list : []).map(function (r) { return { label: String((r && r.label) || 'Unknown'), tokens: Math.max(0, +(r && r.tokens) || 0) }; }).filter(function (r) { return r.tokens > 0; });
+    rows.sort(function (a, b) { return b.tokens - a.tokens; });
+    if (rows.length > 9) { var rest = rows.slice(8); rows = rows.slice(0, 8).concat([{ label: 'Other (' + rest.length + ')', tokens: rest.reduce(function (a, r) { return a + r.tokens; }, 0) }]); }
+    var p = shares(rows.map(function (r) { return r.tokens; }));
+    rows.forEach(function (r, i) { r.pct = p[i]; });
+    return rows;
+  }
+  function explainTop(rows, t) {
+    if (!rows.length) return '';
+    var r = rows[0], p = r.pct + '%';
+    if (t === 'byCube') return 'Most tokens went to ' + r.label + ' (' + p + ').';
+    if (t === 'byAgent') return /main/i.test(r.label) ? 'The main session used ' + p + ' of tokens.' : r.label + ' used the most tokens (' + p + ').';
+    if (t === 'byModel') return r.label + ' handled ' + p + ' of tokens.';
+    return r.label + ' takes up the most context (' + p + ').';
+  }
+  function renderBreakdown(bd) {
+    var rows = rank(bd && bd[tab]);
+    var tabs = '<div class="tabs" role="tablist">' + TABS.map(function (x) { return '<button role="tab" data-tab="' + x[0] + '" class="' + (x[0] === tab ? 'on' : '') + '" aria-selected="' + (x[0] === tab) + '">' + x[1] + '</button>'; }).join('') + '</div>';
+    var body = rows.length ? '<p class="why">' + esc(explainTop(rows, tab)) + '</p>' + rows.map(function (r) {
+      return '<div class="bk"><span class="l" title="' + esc(r.label) + '">' + esc(r.label) + '</span><span class="t"><i style="width:' + Math.max(2, r.pct) + '%"></i></span><span class="v">' + esc(num(r.tokens)) + '<span>' + r.pct + '%</span></span></div>';
+    }).join('') : '<p class="muted">Token split appears once Claude has run a few turns.</p>';
+    return '<h3>Where tokens went</h3>' + tabs + body;
+  }
+  function renderTopTools(list) {
+    var rows = (Array.isArray(list) ? list : []).map(function (r) { return { tool: String((r && r.tool) || '?'), target: String((r && r.target) || ''), tokens: +(r && r.tokens) || 0 }; }).sort(function (a, b) { return b.tokens - a.tokens; }).slice(0, 10);
+    if (!rows.length) return '';
+    return '<h3 style="margin-top:var(--s5)">Heaviest tool results</h3>' + rows.map(function (r) {
+      return '<div class="tool"><b>' + esc(r.tool) + '</b><span class="g" title="' + esc(r.target) + '">' + esc(r.target) + '</span><span class="v">' + esc(num(r.tokens)) + '</span></div>';
+    }).join('');
+  }
+  window.__tpShares = shares;
 
   TP.screens.usage = {
     render: function (state) {
@@ -118,6 +175,11 @@
       var host = root.querySelector('#usage-main');
       var out = u ? html(u) : '<div class="card"><h3>No usage yet</h3><p class="muted">Numbers appear after Claude\'s first turn.</p></div>';
       if (out !== lastSig) { lastSig = out; host.innerHTML = out; }
+      lastState = state;
+      var bh = root.querySelector('#usage-breakdown');
+      if (bh && !bh._wired) { bh._wired = true; bh.addEventListener('click', function (e) { var b = e.target.closest && e.target.closest('[data-tab]'); if (!b) return; tab = b.getAttribute('data-tab'); TP.screens.usage.render(lastState); }); }
+      var bo = '<div class="card">' + renderBreakdown(u && u.breakdown) + renderTopTools(u && u.topTools) + '</div>';
+      if (bh && (bo !== lastBd || !bh.firstChild)) { lastBd = bo; bh.innerHTML = bo; }
     }
   };
 })();
