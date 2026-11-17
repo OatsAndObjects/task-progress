@@ -6,13 +6,16 @@
   var VERD = { APPROVE: ['ap', 'APPROVE'], REQUEST_CHANGES: ['rc', 'REQUEST CHANGES'], NEEDS_INVESTIGATION: ['ni', 'NEEDS INVESTIGATION'] };
   var TABS = [['u', 'Understanding'], ['f', 'Findings'], ['d', 'Diff'], ['q', 'Quiz']];
   var SEVS = ['P0', 'P1', 'P2', 'P3'];
-  var ui = { scope: '', tab: 'u', mode: 'u', note: '', choice: 'changes' };
-  var comments = {};   // 'path:line' -> text
+  var ui = { scope: '', tab: 'u', mode: 'u', choice: 'changes' };
+  var comments = {};   // cubeId -> { 'path:line' -> text }
+  var notes = {};      // cubeId -> review note
+  var demoComment = false;
   var answers = {};    // cubeId -> {qi: oi}
   var diffCache = {};  // path -> diff text fetched from the server
   var asked = {};      // path -> true once file.diff was requested
   var built = false, lastSig = '', lastHash = null, cur = null, curFiles = [], jump = null;
 
+  function cm() { if (!cur) return {}; return comments[cur.id] || (comments[cur.id] = {}); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function ago(t) {
     if (!t) return '';
@@ -23,7 +26,7 @@
     return Math.floor(s / 86400) + ' d ago';
   }
 
-  var CSS = [
+  var STYLE = [
     '#screen-review .sev{font:700 11.5px var(--mono);padding:2px 8px;border-radius:6px;display:inline-block}',
     '#screen-review .sev.P0{background:var(--danger);color:#2a0606} #screen-review .sev.P1{background:#FB923C;color:#2a1200} #screen-review .sev.P2{background:var(--warn);color:#2a1a00} #screen-review .sev.P3{background:var(--surface-3);color:var(--muted)}',
     '#screen-review .sevn{font-size:13px;color:var(--muted)}',
@@ -80,7 +83,7 @@
   ].join('\n');
   function injectCss() {
     if (document.getElementById('css-review')) return;
-    var s = document.createElement('style'); s.id = 'css-review'; s.textContent = CSS; document.head.appendChild(s);
+    var s = document.createElement('style'); s.id = 'css-review'; s.textContent = STYLE; document.head.appendChild(s);
   }
 
   // ---- data ----
@@ -108,18 +111,21 @@
 
   // ---- diff parsing ----
   function parseDiff(text) {
-    var rows = [], o = 0, n = 0, lines = String(text).replace(/\r/g, '').split('\n');
+    var rows = [], o = 0, n = 0, oRem = 0, nRem = 0, lines = String(text).split(/\r?\n/);
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    var started = false;
     lines.forEach(function (l) {
-      var m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(l);
-      if (m) { o = +m[1]; n = +m[2]; started = true; rows.push({ t: 'h', text: l }); return; }
-      if (!started) return; // file headers (---/+++/diff/index)
+      var inHunk = oRem > 0 || nRem > 0;
+      if (!inHunk) {
+        var m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(l);
+        if (m) { o = +m[1]; n = +m[3]; oRem = m[2] === undefined ? 1 : +m[2]; nRem = m[4] === undefined ? 1 : +m[4]; rows.push({ t: 'h', text: l }); return; }
+        if (/^diff --git /.test(l)) rows.push({ t: 'h', text: l });
+        return; // file headers (---/+++/index) and anything between hunks
+      }
       var c = l.charAt(0), tx = l.slice(1);
-      if (c === '+') rows.push({ t: 'a', n: n++, text: tx });
-      else if (c === '-') rows.push({ t: 'd', o: o++, text: tx });
-      else if (c === '\\') return;
-      else rows.push({ t: 'c', o: o++, n: n++, text: c === ' ' ? tx : l });
+      if (c === '\\') return;
+      if (c === '+') { rows.push({ t: 'a', n: n++, text: tx }); nRem--; }
+      else if (c === '-') { rows.push({ t: 'd', o: o++, text: tx }); oRem--; }
+      else { rows.push({ t: 'c', o: o++, n: n++, text: c === ' ' ? tx : l }); oRem--; nRem--; }
     });
     return rows;
   }
@@ -130,37 +136,65 @@
     });
   }
   function lineKey(path, r) { return path + ':' + (r.n != null ? r.n : '-' + r.o); }
-  function lineLabel(k) { return k.replace(/:-(\d+)$/, ' (removed line $1):').replace(/(\d)$/, '$1'); }
 
   function cmtHtml(k) {
-    if (!(k in comments)) return '';
-    var human = k.replace(/:-(\d+)$/, ' (old line $1)');
-    return '<div class="cmt" data-ck="' + esc(k) + '"><div style="flex:1"><small>Your comment on ' + esc(human) + '</small><textarea class="field" rows="2" placeholder="Tell Claude what to change here" aria-label="Line comment">' + esc(comments[k]) + '</textarea></div><button class="btn ghost sm" data-a="delc" data-k="' + esc(k) + '">Delete</button></div>';
+    var cc = cm(); if (!(k in cc)) return '';
+    var human = k.replace(/:-(\d+)$/, ' (old line $1)').replace(/:(\d+)$/, ' line $1');
+    return '<div class="cmt" data-ck="' + esc(k) + '"><div style="flex:1"><small>Your comment on ' + esc(human) + '</small><textarea class="field" rows="2" placeholder="Tell Claude what to change here" aria-label="Line comment">' + esc(cc[k]) + '</textarea></div><button class="btn ghost sm" data-a="delc" data-k="' + esc(k) + '">Delete</button></div>';
   }
-  function numCell(r, k, which) {
+  function numCell(r, k, which, title) {
     var v = which === 'o' ? r.o : r.n;
-    var has = k in comments;
-    return '<span class="n' + (has ? ' has' : '') + '" data-a="cmt" data-k="' + esc(k) + '" title="Comment on this line">' + (v == null ? '' : v) + '</span>';
+    var has = k in cm();
+    return '<span class="n' + (has ? ' has' : '') + '" data-a="cmt" data-k="' + esc(k) + '" title="' + esc(title || 'Comment on this line') + '">' + (v == null ? '' : v) + '</span>';
+  }
+  var NUL = '<div class="dl nul"><span class="n"></span><span class="c"></span></div>';
+  function splitHtml(f, rows) {
+    var out = '', d = [], a = [];
+    function side(r, which, ctx) {
+      var k = lineKey(f.path, r), cls = ctx ? 'ctx' : which === 'o' ? 'del' : 'add';
+      var title = ctx && which === 'o' ? 'Comment on line ' + r.n + ' (new file)' : '';
+      return '<div class="dl ' + cls + '" data-lk="' + esc(k) + '">' + numCell(r, k, which, title) + '<span class="c">' + tok(r.text) + '</span></div>';
+    }
+    function flush() {
+      var m = Math.max(d.length, a.length);
+      for (var i = 0; i < m; i++) {
+        out += '<div class="srow">' + (d[i] ? side(d[i], 'o', false) : NUL) + (a[i] ? side(a[i], 'n', false) : NUL) + '</div>';
+        if (d[i]) out += cmtHtml(lineKey(f.path, d[i]));
+        if (a[i]) out += cmtHtml(lineKey(f.path, a[i]));
+      }
+      d = []; a = [];
+    }
+    rows.forEach(function (r) {
+      if (r.t === 'd') { if (a.length) flush(); d.push(r); }
+      else if (r.t === 'a') a.push(r);
+      else {
+        flush();
+        if (r.t === 'h') out += '<div class="dl hunk"><span class="n"></span><span class="n"></span><span class="c">' + esc(r.text) + '</span></div>';
+        else out += '<div class="srow">' + side(r, 'o', true) + side(r, 'n', true) + '</div>' + cmtHtml(lineKey(f.path, r));
+      }
+    });
+    flush();
+    return out;
   }
   function diffFileHtml(f) {
     var d = diffOf(f), rows = d ? parseDiff(d) : null, h;
-    var nc = 0; Object.keys(comments).forEach(function (k) { if (k.indexOf(f.path + ':') === 0) nc++; });
+    var nc = 0; Object.keys(cm()).forEach(function (k) { if (k.indexOf(f.path + ':') === 0) nc++; });
     h = '<div class="diff" data-path="' + esc(f.path) + '"><div class="dfh"><span>' + esc(f.path) + '</span><span class="cnt">' + esc(f.op || '') + '</span><span class="sp"></span>' + (nc ? '<span class="chip warn">' + nc + ' comment' + (nc > 1 ? 's' : '') + '</span>' : '') + '</div><div class="dscroll">';
     if (!rows) return h + '<div class="emptyc" style="background:transparent">' + (TP.demoMode || asked[f.path] ? 'No diff recorded for this file.' : 'Loading the diff...') + '</div></div></div>';
     if (!rows.length) return h + '<div class="emptyc" style="background:transparent">The diff has no changed lines.</div></div></div>';
     rows.forEach(function (r) {
+      if (r.t === 'h' && ui.mode !== 'u') return;
       if (r.t === 'h') { h += '<div class="dl hunk"><span class="n"></span><span class="n"></span><span class="c">' + esc(r.text) + '</span></div>'; return; }
+      if (ui.mode !== 'u') return;
       var k = lineKey(f.path, r), cls = r.t === 'a' ? 'add' : r.t === 'd' ? 'del' : 'ctx';
       var attr = ' data-lk="' + esc(k) + '"';
       if (ui.mode === 'u') {
         h += '<div class="dl ' + cls + '"' + attr + '>' + numCell(r, k, 'o') + numCell(r, k, 'n') + '<span class="c">' + tok(r.text) + '</span></div>';
-      } else {
-        var L = r.t === 'a' ? '<div class="dl nul"><span class="n"></span><span class="c"></span></div>' : '<div class="dl ' + (r.t === 'd' ? 'del' : 'ctx') + '"' + attr + '>' + numCell(r, k, 'o') + '<span class="c">' + tok(r.text) + '</span></div>';
-        var R = r.t === 'd' ? '<div class="dl nul"><span class="n"></span><span class="c"></span></div>' : '<div class="dl ' + (r.t === 'a' ? 'add' : 'ctx') + '"' + attr + '>' + numCell(r, k, 'n') + '<span class="c">' + tok(r.text) + '</span></div>';
-        h += '<div class="srow">' + L + R + '</div>';
       }
-      h += cmtHtml(k);
+      if (ui.mode === 'u') h += cmtHtml(k);
     });
+    if (ui.mode === 's') h += splitHtml(f, rows);
+
     return h + '</div></div>';
   }
 
@@ -183,11 +217,11 @@
     if (!r) return emptyBox('No review yet', 'Findings appear here once the review has run.');
     var fs = r.findings || [];
     if (!fs.length) return emptyBox('No findings', 'The review found nothing to fix.');
-    return SEVS.map(function (s) {
-      var l = fs.filter(function (f) { return f.severity === s; });
+    return SEVS.concat(['Other']).map(function (s) {
+      var l = fs.filter(function (f) { return s === 'Other' ? SEVS.indexOf(f.severity) < 0 : f.severity === s; });
       if (!l.length) return '';
-      return '<div class="fgroup"><h3><span class="sev ' + s + '">' + s + '</span>' + l.length + ' finding' + (l.length > 1 ? 's' : '') + '</h3>' + l.map(function (f) {
-        return '<div class="finding"><div class="t"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span><b>' + esc(f.summary) + '</b></div>' +
+      return '<div class="fgroup"><h3><span class="sev ' + (s === 'Other' ? 'P3' : s) + '">' + s + '</span>' + l.length + ' finding' + (l.length > 1 ? 's' : '') + '</h3>' + l.map(function (f) {
+        return '<div class="finding"><div class="t"><span class="sev ' + (SEVS.indexOf(f.severity) < 0 ? 'P3' : f.severity) + '">' + esc(f.severity || 'Other') + '</span><b>' + esc(f.summary) + '</b></div>' +
           (f.file ? '<button class="flink" data-a="jump" data-f="' + esc(f.file) + '" data-l="' + esc(f.line || '') + '">' + esc(f.file) + (f.line ? ':' + esc(f.line) : '') + '</button>' : '') + '</div>';
       }).join('') + '</div>';
     }).join('');
@@ -197,7 +231,7 @@
       '<span class="faint" style="font-size:13.5px">Click a line number to leave a comment.</span><span style="flex:1"></span>' +
       '<div class="revbar"><select class="field" data-a="choice" aria-label="Verdict note"><option value="changes"' + (ui.choice === 'changes' ? ' selected' : '') + '>Verdict: changes needed</option><option value="approve"' + (ui.choice === 'approve' ? ' selected' : '') + '>Verdict: looks good</option><option value="comment"' + (ui.choice === 'comment' ? ' selected' : '') + '>Verdict: comments only</option></select>' +
       '<button class="btn pri" data-a="send">Send review to Claude</button></div></div>' +
-      '<input class="field" data-a="note" style="width:100%;margin-bottom:var(--s3)" placeholder="Optional note to Claude with this review" aria-label="Review note" value="' + esc(ui.note) + '">';
+      '<input class="field" data-a="note" style="width:100%;margin-bottom:var(--s3)" placeholder="Optional note to Claude with this review" aria-label="Review note" value="' + esc((cur && notes[cur.id]) || '') + '">';
     if (!curFiles.length) return bar + emptyBox('No changed files', 'Files Claude changes in this session will show here with their diffs.');
     return bar + curFiles.map(diffFileHtml).join('');
   }
@@ -235,8 +269,8 @@
     body.addEventListener('click', onBodyClick);
     body.addEventListener('input', function (e) {
       var t = e.target;
-      if (t.matches('.cmt textarea')) { var ck = t.closest('.cmt').dataset.ck; comments[ck] = t.value; }
-      else if (t.dataset.a === 'note') ui.note = t.value;
+      if (t.matches('.cmt textarea')) { var ck = t.closest('.cmt').dataset.ck; cm()[ck] = t.value; }
+      else if (t.dataset.a === 'note' && cur) notes[cur.id] = t.value;
     });
     body.addEventListener('change', function (e) { if (e.target.dataset.a === 'choice') ui.choice = e.target.value; });
     body.addEventListener('focusout', function (e) {
@@ -244,14 +278,14 @@
       if (t.matches && t.matches('.cmt textarea') && !t.value.trim()) {
         var box = t.closest('.cmt'); if (!box) return;
         var ck = box.dataset.ck;
-        setTimeout(function () { if (comments[ck] !== undefined && !String(comments[ck]).trim() && document.activeElement !== t) { delete comments[ck]; if (box.parentNode) box.remove(); markNums(); } }, 120);
+        setTimeout(function () { var cc = cm(); if (cc[ck] !== undefined && !String(cc[ck]).trim() && document.activeElement !== t) { delete cc[ck]; if (box.parentNode) box.remove(); markNums(); } }, 120);
       }
     });
     built = true;
   }
   function markNums() {
     var el = root(); if (!el) return;
-    el.querySelectorAll('.dl .n[data-k]').forEach(function (n) { n.classList.toggle('has', n.dataset.k in comments); });
+    el.querySelectorAll('.dl .n[data-k]').forEach(function (n) { n.classList.toggle('has', n.dataset.k in cm()); });
   }
   function onBodyClick(e) {
     var t = e.target.closest('[data-a]'); if (!t) return;
@@ -260,14 +294,15 @@
     else if (a === 'mode') { ui.mode = t.dataset.m; renderAll(TP.state, true); }
     else if (a === 'cmt') {
       var k = t.dataset.k;
-      if (k in comments && !String(comments[k]).trim()) delete comments[k];
-      else if (!(k in comments)) comments[k] = '';
+      var cc = cm();
+      if (k in cc && !String(cc[k]).trim()) delete cc[k];
+      else if (!(k in cc)) cc[k] = '';
       var keep = k;
       renderAll(TP.state, true);
-      var box = root().querySelector('.cmt[data-ck="' + (window.CSS && CSS.escape ? CSS.escape(keep) : keep) + '"] textarea');
+      var box = root().querySelector('.cmt[data-ck="' + (window.CSS && window.CSS.escape ? window.CSS.escape(keep) : keep) + '"] textarea');
       if (box) box.focus();
     }
-    else if (a === 'delc') { delete comments[t.dataset.k]; renderAll(TP.state, true); }
+    else if (a === 'delc') { delete cm()[t.dataset.k]; renderAll(TP.state, true); }
     else if (a === 'quiz') { var a2 = answers[cur.id] || (answers[cur.id] = {}); a2[+t.dataset.q] = +t.dataset.o; renderAll(TP.state, true); }
     else if (a === 'qreset') { answers[cur.id] = {}; renderAll(TP.state, true); }
     else if (a === 'send') sendReview();
@@ -292,16 +327,17 @@
     sel.value = ui.scope;
     cur = list.filter(function (c) { return c.id === ui.scope; })[0] || null;
     curFiles = cur ? cubeFiles(cur, state) : [];
+    if (demoComment && cur) { demoComment = false; var dc = cm(); if (!dc['web/app/core.js:84']) dc['web/app/core.js:84'] = 'Check the error path here.'; }
     var sig = JSON.stringify([cur && cur.id, cur && cur.review, cur && cur.status, curFiles.map(function (f) { return [f.path, f.count, f.lastAt, diffOf(f).length]; })]);
     el.querySelector('#rv-run').disabled = !cur || cur.status === 'reviewing';
     el.querySelector('#rv-runlab').textContent = cur && cur.status === 'reviewing' ? 'Review running' : (cur && cur.review ? 'Run PR review again' : 'Run PR review');
     el.querySelectorAll('#rv-tabs [data-tab]').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === ui.tab); b.setAttribute('aria-selected', b.dataset.tab === ui.tab); });
     if (!force && sig === lastSig) { renderVerdictIfChanged(); return; }
-    lastSig = sig;
     renderVerdict();
     var body = el.querySelector('#rv-body'), sc = el.scrollTop;
     var ae = document.activeElement;
     if (!force && ae && body.contains(ae) && /^(TEXTAREA|INPUT|SELECT)$/.test(ae.tagName)) return; // never steal typing
+    lastSig = sig;
     if (!cur) body.innerHTML = emptyBox('Nothing to review', 'Finished cubes waiting for your review will show up here.');
     else body.innerHTML = ui.tab === 'u' ? tabUnderstanding(cur) : ui.tab === 'f' ? tabFindings(cur) : ui.tab === 'd' ? tabDiff() : tabQuiz(cur);
     el.scrollTop = sc;
@@ -338,22 +374,23 @@
     TP.send('cube.review', { id: id }).then(function (r) { if (r && r.ok && !TP.demoMode) TP.toast('Review started for ' + id); });
   }
   function bundle() {
-    var keys = Object.keys(comments).filter(function (k) { return String(comments[k]).trim(); });
+    var cc = cm(), note = (notes[cur.id] || '').trim();
+    var keys = Object.keys(cc).filter(function (k) { return String(cc[k]).trim(); });
     var head = { changes: 'Please make these changes.', approve: 'This looks good to me.', comment: 'Here are my comments, no verdict yet.' }[ui.choice];
     var out = ['Review of cube ' + cur.id + (cur.title ? ' (' + cur.title + ')' : '') + '.', head];
-    if (ui.note.trim()) out.push('Note: ' + ui.note.trim());
+    if (note) out.push('Note: ' + note);
     if (keys.length) {
       out.push('', 'Line comments:');
-      keys.forEach(function (k) { out.push('- ' + k.replace(/:-(\d+)$/, ' (old line $1)').replace(/:(\d+)$/, ' line $1') + ': ' + String(comments[k]).trim().replace(/\n+/g, ' ')); });
+      keys.forEach(function (k) { out.push('- ' + k.replace(/:-(\d+)$/, ' (old line $1)').replace(/:(\d+)$/, ' line $1') + ': ' + String(cc[k]).trim().replace(/\n+/g, ' ')); });
     }
     return { text: out.join('\n'), n: keys.length };
   }
   function sendReview() {
     if (!cur) return;
     var b = bundle();
-    if (!b.n && !ui.note.trim() && ui.choice !== 'approve') { TP.toast('Add a line comment or a note first'); return; }
+    if (!b.n && !(notes[cur.id] || '').trim() && ui.choice !== 'approve') { TP.toast('Add a line comment or a note first'); return; }
     if (TP.demoMode) { TP.toast('Demo: review is not sent'); console.info('Demo review prompt', b.text); return; }
-    TP.send('session.prompt', { text: b.text }).then(function (r) { if (r && r.ok) TP.toast('Review sent to Claude'); });
+    TP.send('session.prompt', { text: b.text }).then(function (r) { if (r && r.ok) TP.toast('Review sent to Claude'); else TP.toast((r && r.message) || 'Could not send review'); }).catch(function () { TP.toast('Could not send review'); });
   }
 
   function applyHash() {
@@ -366,7 +403,7 @@
     if (m) ui.tab = m;
     if (p[2] === 'split') ui.mode = 's';
     if (p[2] === 'unified') ui.mode = 'u';
-    if (p[3] === 'comment') comments['web/app/core.js:84'] = comments['web/app/core.js:84'] || 'Check the error path here.';
+    if (p[3] === 'comment') demoComment = true;
   }
 
   TP.screens.review = {
