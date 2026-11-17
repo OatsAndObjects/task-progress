@@ -290,6 +290,10 @@ type Ctx = {
   frame: number
   /** Agents that finished before their `agent.spawn` answer came back; bounded. */
   doneIds: string[]
+  /** True once our `prompt.compose` hook has run (another plugin may skip it). */
+  composeSeen: boolean
+  /** True once the rules were attached to a user prompt as a fallback. */
+  rulesSent: boolean
 }
 
 function startTicker($: any, c: Ctx) {
@@ -449,7 +453,7 @@ async function orchestrateCommand($: any, e: any) {
 }
 
 export const register: Register = on => {
-  const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [] }
+  const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [], composeSeen: false, rulesSent: false }
   // The session dashboard: /tp-dashboard and its pane. Its collectors ride on the hooks below.
   registerDashboard(on)
 
@@ -679,6 +683,21 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     if (!e.command && !e.isMeta) await $.state.set(checkedRef, false)
     await quiet(onPromptSubmit($, e))
+    // Fallback: when another plugin bypasses prompt.compose, the rules ride with the prompt.
+    if (!e.command && !e.isMeta && !c.composeSeen) {
+      const orch = await isOn($)
+      let text: string | null = null
+      if (!c.rulesSent) {
+        text =
+          'task-progress rules (its system-prompt section was bypassed by another plugin, so they ride with the prompt): ' +
+          (orch ? ORCH_PROMPT + ' ' : '') +
+          PROMPT
+        c.rulesSent = true
+      } else if (orch) {
+        text = 'task-progress orchestrator on: TaskInputs first, then TaskPlan, then executors with "[budget: <N>m step: <k>]".'
+      }
+      if (text) return next({ ...e, context: [...(e.context ?? []), text] })
+    }
     return next(e)
   })
 
@@ -827,6 +846,7 @@ export const register: Register = on => {
   })
 
   on('prompt.compose', async ($, e, next) => {
+    c.composeSeen = true
     const out = await next(e)
     const sections = [...out.sections]
     if (await isOn($)) sections.push({ id: `${PLUGIN}:orchestrator`, text: ORCH_PROMPT, scope: 'session' as const })

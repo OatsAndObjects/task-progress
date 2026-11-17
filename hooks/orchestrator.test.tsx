@@ -24,7 +24,7 @@ function setup($: any, on: any) {
   on('tool.register', () => ({ value: { tool: 'x' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('tool.call', () => ({ result: {} }))
-  on('prompt.submit', (_: any, e: any) => ({ text: e.text }))
+  on('prompt.submit', (_: any, e: any) => ({ text: e.text, context: e.context }))
   let nextId = 0
   on('agent.spawn', () => ({ model: 'sonnet', agentId: `a${++nextId}` }))
   const call = (tool: string, input: Record<string, unknown> = {}) => $.tool.call({ tool, ...input })
@@ -236,6 +236,35 @@ test('mode off: no gate, no budget tag needed, no timing, no protocol text; on r
   out = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })
   expect(out.sections.map((s: any) => s.id)).toEqual(['intro', 'task-progress:orchestrator', 'task-progress:progress-bar'])
   expect(out.sections[1].text.length).toBeLessThan(1100)
+})
+
+test('no compose: first user prompt carries the rules, the next only a reminder', async ($, on) => {
+  const { start } = setup($, on)
+  await start()
+  const first = await $.prompt.submit({ text: 'hello' })
+  const ctx1 = (first.context ?? []).join(' ')
+  expect(ctx1).toContain('TaskInputs')
+  expect(ctx1).toContain('TaskProgress')
+  const second = await $.prompt.submit({ text: 'again' })
+  const ctx2 = (second.context ?? []).join(' ')
+  expect(ctx2).toContain('TaskInputs first')
+  expect(ctx2).not.toContain('TaskProgress')
+})
+
+test('after compose ran: user prompts get no added context', async ($, on) => {
+  const { start } = setup($, on)
+  on('prompt.compose', () => ({ sections: [] }))
+  await start()
+  await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })
+  const out = await $.prompt.submit({ text: 'hello' })
+  expect(out.context ?? []).toEqual([])
+})
+
+test('a slash command prompt gets no added context', async ($, on) => {
+  const { start } = setup($, on)
+  await start()
+  const out = await $.prompt.submit({ text: '/orchestrate status', command: { name: 'orchestrate' } })
+  expect(out.context ?? []).toEqual([])
 })
 
 test('/orchestrate arguments', async ($, on) => {

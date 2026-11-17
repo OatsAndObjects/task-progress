@@ -60,6 +60,10 @@ For a multi-action task, Claude calls `TaskPlan` with `cubes` instead of plain s
 
 **Slash commands.** The plugin also ships a skill called `orchestrate`, so the engine refuses a bare `/orchestrate` command; use `/tp-orchestrate on | off | status` (or `/task-progress:orchestrate` for the skill).
 
+## Bypassed prompt.compose (0.7.1)
+
+If another plugin bypasses prompt.compose, the rules are attached to user prompts instead (in full on the first prompt, then a one-line reminder while orchestrator mode is on).
+
 ## Install (local directory marketplace)
 
 Place this folder inside a directory that you add as a local marketplace, then install the plugin from it:
