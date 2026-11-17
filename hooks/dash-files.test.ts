@@ -77,7 +77,7 @@ test('file.diff diffs tracked files and shows untracked ones as added', async ()
         if (argv[0].endsWith('where.exe')) return { exitCode: 0, stdout: GIT, stderr: '' }
         seen.push(argv)
         expect(init.cwd).toBe('C:\\Users\\u') // never the project
-        if (argv[3] === 'ls-files') return { exitCode: 1, stdout: '', stderr: '' }
+        if (argv[5] === 'ls-files') return { exitCode: 1, stdout: '', stderr: '' }
         return { exitCode: 1, stdout: 'DIFF', stderr: '' }
       },
     },
@@ -86,7 +86,7 @@ test('file.diff diffs tracked files and shows untracked ones as added', async ()
   const r = await fileDiff(d, 't.txt')
   expect(r.ok).toBe(true)
   expect((r.data as any).diff).toBe('DIFF')
-  expect(seen[1]).toEqual([GIT, '-C', 'C:\\proj\\app', 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--', '/dev/null', 't.txt'])
+  expect(seen[1]).toEqual([GIT, '-c', 'core.fsmonitor=false', '-C', 'C:\\proj\\app', 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--', '/dev/null', 't.txt'])
   expect((await fileDiff(d, '../x')).ok).toBe(false)
 })
 
@@ -105,7 +105,7 @@ test('file.open validates, confines, and spawns the editor', async () => {
   expect(d.calls.length).toBe(0)
   const r = await fileOpen(d, 'a.ts', 'vscode', 3)
   expect(r.ok).toBe(true)
-  expect(d.calls[0]).toEqual(['C:\\Windows\\System32\\cmd.exe', '/d', '/c', CODE, '-g', 'C:\\proj\\app\\a.ts:3'])
+  expect(d.calls[0]).toEqual(['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', `""${CODE}" "-g" "C:\\proj\\app\\a.ts:3""`])
   const s = deps({ exists: async (p: string) => p.endsWith('studio64.exe') }, { 'C:/proj/app/a.ts': 'x' })
   expect((await fileOpen(s, 'a.ts', 'studio', 9)).ok).toBe(true)
   expect(s.calls[0]).toEqual(['C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe', '--line', '9', 'C:\\proj\\app\\a.ts'])
@@ -184,7 +184,7 @@ test('where.exe: extensionless shims are skipped and .exe beats .cmd', async () 
 test('a .cmd editor goes through cmd.exe /c; metacharacters in the path are refused', async () => {
   const d = deps({}, { 'C:/proj/app/a.ts': 'x' })
   expect((await fileOpen(d, 'a.ts', 'vscode', 3)).ok).toBe(true)
-  expect(d.calls[0]).toEqual(['C:\\Windows\\System32\\cmd.exe', '/d', '/c', CODE, '-g', 'C:\\proj\\app\\a.ts:3'])
+  expect(d.calls[0]).toEqual(['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', `""${CODE}" "-g" "C:\\proj\\app\\a.ts:3""`])
   const evil = deps({ cwd: 'C:\\proj\\a&b' }, { 'C:/proj/a&b/a.ts': 'x' })
   evil.stat = async (p: string) => (p === 'C:/proj/a&b' ? { kind: 'dir', size: 0, realPath: 'C:\\proj\\a&b' } : { kind: 'file', size: 1, realPath: p.replace(/\//g, '\\') })
   const r = await fileOpen(evil, 'a.ts', 'vscode', 1)

@@ -162,7 +162,7 @@ export async function fileDiff(d: FileDeps, input: unknown): Promise<FileResult>
   // git runs from the neutral directory (a repo-planted git.exe must not win), pointed at the project with -C.
   const gitExe = await resolveExe(d, 'git')
   if (!gitExe) return fail('git not found')
-  const git = (args: string[]) => d.run([gitExe, '-C', d.cwd, ...args], { cwd: d.env.neutralDir, timeoutMs: 15000 })
+  const git = (args: string[]) => d.run([gitExe, '-c', 'core.fsmonitor=false', '-C', d.cwd, ...args], { cwd: d.env.neutralDir, timeoutMs: 15000 })
   try {
     const tracked = await git(['ls-files', '--error-unmatch', '--', r.rel])
     let out: { exitCode: number; stdout: string; stderr: string }
@@ -219,12 +219,13 @@ export async function fileOpen(d: FileDeps, input: unknown, editor: unknown, lin
     }
     let argv = editorArgv(editor, exe, abs, n)
     if (d.isWindows && /\.(cmd|bat)$/i.test(exe)) {
-      // batch files need cmd.exe; refuse anything cmd would interpret
-      if (argv.some(a => /[&^%"<>|]/.test(a))) {
+      // batch files need cmd.exe; allow only plainly safe characters in every element (allowlist, not a blacklist)
+      if (argv.some(a => !/^[A-Za-z0-9 .\\/:_()-]+$/.test(a))) {
         lastErr = `${cand} path has characters that are unsafe for cmd.exe`
         continue
       }
-      argv = ['C:\\Windows\\System32\\cmd.exe', '/d', '/c', ...argv]
+      // one command string, each element quoted; /s strips only the outer pair of quotes
+      argv = ['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', `"${argv.map(a => `"${a}"`).join(' ')}"`]
     }
     // The launcher may keep running with the editor; success is "started and did not fail fast".
     // cwd is never the project dir: bare names resolve against cwd first on Windows

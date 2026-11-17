@@ -1,6 +1,6 @@
 # task-progress
 
-A Claude Code plugin (v0.6.0) that shows an estimated progress bar for the current task in a band above the prompt.
+A Claude Code plugin (v1.0.0) that shows an estimated progress bar for the current task in a band above the prompt.
 
 - `TaskProgress` tool: the model reports task name, estimated total steps, steps done and a label; the band renders the bar.
 - `/progress` command: shows the current progress as plain text; `/progress clear` clears it.
@@ -92,3 +92,24 @@ Plugin manifest: `.claude-plugin/plugin.json`. Hook module: `hooks/register.tsx`
 ## Review gates done (0.10.1)
 
 With the gate on, a cube whose executor finishes goes to `reviewing` (pane glyph `◐`, "in review"), not `done`; dependents keep waiting because only `done` satisfies `after`, and Claude is told `Cube <id> is in review: dispatch a review executor (Skill "pr-reviewer" on its files), then CubeReview.` `CubeReview` APPROVE makes it `done` and releases dependents; REQUEST_CHANGES reopens it to `approved` for a fix; NEEDS_INVESTIGATION leaves it in review. Escape hatch: `cube.markDone {id}` (web button "Mark done") forces a cube in review, failed or approved to done. With the gate off a finished cube is done as before. Editing a legacy cube without a new flow no longer fails. The web dashboard now shows object flow steps, edits them as file/fn/does/calls inputs, shows the review line and a Run review button, and accepts `cube.review`.
+
+## Dashboard v2 (1.0.0)
+
+The web dashboard is now the v2 app (`web/app`), served at `/`. The old single-page dashboard stays at `/v1/` and `/v2/` still works. The mod always opens `/?t=<token>`.
+
+**Screens** (hash routes, phone-first, also fine on a wide window):
+
+- `#session`: live chat with Claude (streamed text, tool calls, executors, permission cards, queued prompts).
+- `#board`: tickets kanban (add, edit, move, send to Claude), kept across sessions.
+- `#cubes`: approval cubes with flow, review and the same actions as the pane.
+- `#review`: PR review reports, findings by severity and the quiz.
+- `#files`: files Claude changed, with the git diff and an **Open in editor** button (VS Code or Android Studio, at a line).
+- `#usage`: tokens, cost and the tools breakdown.
+
+**Auto-open.** The dashboard opens in your browser when it starts. `/tp-dashboard auto on|off` turns that on or off.
+
+**Allow / Deny in the browser.** A permission prompt also appears on the web page. You have 7 seconds to answer there; after that it falls back to the terminal prompt.
+
+**Demo mode.** `/?demo=1` renders every screen with sample data and no backend.
+
+Other: the event stream drops slow clients (2 MB backlog) on both the v1 and v2 streams; git calls run with `core.fsmonitor=false`; editor launchers that are `.cmd`/`.bat` files only start when every path uses plain characters.

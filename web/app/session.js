@@ -2,6 +2,7 @@
 // Screen: session. Chat column (bubbles, tool/executor/permission/waiting cards, composer) + plan panel.
 (function () {
   var built = false, root, chat, thread, msg, qbadge, panelEl, stick = true;
+  function normWs(x) { return String(x == null ? '' : x).replace(/\r\n?/g, '\n').replace(/\s+/g, ' ').trim(); }
   var running = false, cur = null, tools = {}, toolIn = {}, execs = {}, perms = {}, seen = [], pending = [];
   var lastState = null, panelOff = false;
 
@@ -233,7 +234,7 @@
       var now = Date.now();
       pending = pending.filter(function (q) { return now - q.at < 60000; });
       for (var qi = 0; qi < pending.length; qi++) {
-        if (pending[qi].text === String(e.text || '').trim()) { pending.splice(qi, 1); return; }
+        if (normWs(pending[qi].text) === normWs(e.text)) { pending.splice(qi, 1); return; }
       }
       var b = div('ub'); b.textContent = e.text || ''; add(b); return;
     }

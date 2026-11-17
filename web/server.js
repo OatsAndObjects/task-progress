@@ -449,7 +449,7 @@ let ringBytes = 0;
 function writeTo(set, res, frame) {
   try {
     res.write(frame);
-    if (set === streamClients && res.writableLength > CLIENT_BACKLOG_MAX) {
+    if (res.writableLength > CLIENT_BACKLOG_MAX) {
       set.delete(res);
       res.destroy(); // end() would wait for the backlog; EventSource reconnects and replays
     }
@@ -490,21 +490,13 @@ function broadcastSnapshot() {
   const frame = `event: snapshot\ndata: ${latestSnapshot}\n\n`;
   for (const res of streamClients) writeTo(streamClients, res, frame);
   for (const res of sseClients) {
-    try {
-      res.write(frame);
-    } catch {
-      sseClients.delete(res);
-    }
+    writeTo(sseClients, res, frame);
   }
 }
 
 const heartbeat = setInterval(() => {
   for (const res of sseClients) {
-    try {
-      res.write(`: hb ${Date.now()}\n\n`);
-    } catch {
-      sseClients.delete(res);
-    }
+    writeTo(sseClients, res, `: hb ${Date.now()}\n\n`);
   }
   for (const res of streamClients) writeTo(streamClients, res, `: hb ${Date.now()}\n\n`);
 }, HEARTBEAT_MS);
@@ -560,7 +552,7 @@ async function handle(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${boundPort}`);
   const p = url.pathname;
 
-  if (p === '/' || p === '/index.html') {
+  if (p === '/v1' || p === '/v1/') {
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { ok: false, message: 'method not allowed' });
     let html;
     try {
@@ -579,7 +571,8 @@ async function handle(req, res) {
   }
 
   // ---- dashboard v2: static files from web/app (same token rules as the page: none for static, ?t= used by its API calls) ----
-  if (p === '/v2' || p.startsWith('/v2/')) {
+  const rootAsset = p === '/' || p === '/index.html' || /^\/[\w.-]+\.(js|css)$/.test(p);
+  if (rootAsset || p === '/v2' || p.startsWith('/v2/')) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { ok: false, message: 'method not allowed' });
     if (p === '/v2') {
       res.writeHead(302, { ...BASE_HEADERS, Location: '/v2/' + url.search });
@@ -587,7 +580,7 @@ async function handle(req, res) {
     }
     let rel;
     try {
-      rel = decodeURIComponent(p.slice(4));
+      rel = rootAsset ? (p === '/' ? '' : decodeURIComponent(p.slice(1))) : decodeURIComponent(p.slice(4));
     } catch {
       return send(res, 400, 'bad path', 'text/plain; charset=utf-8');
     }
