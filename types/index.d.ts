@@ -68,6 +68,8 @@ export type SnapshotAgent = {
   endedAt?: number
   budgetMin?: number
   step?: number
+  /** From the dispatch tag: the cube this agent builds or reviews. */
+  cube?: { id: string; kind: 'build' | 'review' }
 }
 export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped'
 export type SnapshotShell = {
@@ -166,8 +168,13 @@ export type SnapshotUsage = {
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }
   /** Total tokens of the last 40 turns, newest last. */
   perTurn: number[]
+  /** Who used the tokens (all optional; the Usage screen reads this). */
+  breakdown?: { byCube: UsageSlice[]; byAgent: UsageSlice[]; byModel: UsageSlice[]; context: UsageSlice[] }
+  /** The 20 biggest tool results, largest first. */
+  topTools?: { tool: string; target: string; tokens: number }[]
   updatedAt: number
 }
+export type UsageSlice = { label: string; tokens: number }
 /** The session dashboard's whole state; the web app reads exactly this shape. */
 export type Snapshot = {
   session: { id: string; cwd: string; startedAt: number }

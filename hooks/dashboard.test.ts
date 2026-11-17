@@ -6,6 +6,9 @@ import {
   TOOL_LOG_MAX,
   addAgent,
   addTurnUsage,
+  attributeTurn,
+  attributeTool,
+  setContextBreakdown,
   addShell,
   clearFinished,
   commandFromLine,
@@ -317,4 +320,33 @@ test('perTurn is capped at 40', () => {
   for (let i = 0; i < 55; i++) s = addTurnUsage(s, { input_tokens: i, output_tokens: 0 }, i)
   expect(s.usage?.perTurn.length).toBe(PER_TURN_MAX)
   expect(s.usage?.perTurn[39]).toBe(54)
+})
+
+test('attribution splits main vs executors, cube build vs review, model', () => {
+  let s = addAgent(base(), { id: 'a1', description: 'build c3', type: 'x', startedAt: 1, cube: { id: 'c3', kind: 'build' } })
+  s = addAgent(s, { id: 'a2', description: 'review c3', type: 'x', startedAt: 1, cube: { id: 'c3', kind: 'review' } })
+  const turns: [string | undefined, string, number][] = [[undefined, 'opus', 10], ['a1', 'sonnet', 20], ['a2', 'sonnet', 5], ['a1', 'sonnet', 1]]
+  for (const [agentId, model, n] of turns) {
+    const usage = { input_tokens: n, output_tokens: 0 }
+    s = attributeTurn(addTurnUsage(s, usage, 1), { agentId, model, usage })
+  }
+  const b = s.usage!.breakdown!
+  expect(b.byAgent).toEqual([{ label: 'main', tokens: 10 }, { label: 'build c3', tokens: 21 }, { label: 'review c3', tokens: 5 }])
+  expect(b.byCube).toEqual([{ label: 'main', tokens: 10 }, { label: 'c3 build', tokens: 21 }, { label: 'c3 review', tokens: 5 }])
+  expect(b.byModel).toEqual([{ label: 'opus', tokens: 10 }, { label: 'sonnet', tokens: 26 }])
+  const total = s.usage!.perTurn.reduce((a, x) => a + x, 0)
+  expect(b.byAgent.reduce((a, x) => a + x.tokens, 0)).toBe(total)
+  expect(attributeTurn(base(), null as any)).toBeTruthy()
+})
+
+test('top tools capped at 20 and sorted; context breakdown maps or is skipped', () => {
+  let s = base()
+  for (let i = 1; i <= 30; i++) s = attributeTool(s, { tool: 'Read', target: 'f' + i, chars: i * 400 })
+  const t = s.usage!.topTools!
+  expect(t.length).toBe(20)
+  expect(t[0]).toEqual({ tool: 'Read', target: 'f30', tokens: 3000 })
+  expect(t.map(x => x.tokens)).toEqual([...t.map(x => x.tokens)].sort((a, b) => b - a))
+  expect(setContextBreakdown(s, { nothing: 1 })).toBe(s)
+  const c = setContextBreakdown(s, { breakdown: [{ label: 'tools', tokens: 5 }] })
+  expect(c.usage!.breakdown!.context).toEqual([{ label: 'tools', tokens: 5 }])
 })

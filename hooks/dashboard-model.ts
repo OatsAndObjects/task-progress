@@ -7,6 +7,7 @@ import type {
   ShellStatus,
   Snapshot,
   SnapshotUsage,
+  UsageSlice,
   SnapshotPlanStep,
   UserTask,
   UserTaskPriority,
@@ -124,7 +125,7 @@ export function setStep(s: Snapshot, k: number, patch: Partial<SnapshotPlanStep>
 
 export function addAgent(
   s: Snapshot,
-  a: { id: string; description: string; type: string; startedAt: number; budgetMin?: number; step?: number },
+  a: { id: string; description: string; type: string; startedAt: number; budgetMin?: number; step?: number; cube?: { id: string; kind: 'build' | 'review' } },
 ): Snapshot {
   const agents = s.agents.filter(x => x.id !== a.id)
   agents.push({ ...a, status: 'running' })
@@ -437,4 +438,84 @@ export function randomToken(): string {
   if (c && typeof c.getRandomValues === 'function') c.getRandomValues(bytes)
   else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256)
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+}
+
+export const TOP_TOOLS_MAX = 20
+const SLICES_MAX = 40
+const blankBreakdown = () => ({ byCube: [] as UsageSlice[], byAgent: [] as UsageSlice[], byModel: [] as UsageSlice[], context: [] as UsageSlice[] })
+
+function bump(list: UsageSlice[] | undefined, label: string, tokens: number): UsageSlice[] {
+  const out = (list ?? []).map(x => ({ ...x }))
+  const hit = out.find(x => x.label === label)
+  if (hit) hit.tokens += tokens
+  else if (out.length < SLICES_MAX) out.push({ label, tokens })
+  else {
+    // bounded: late labels fold into "other"
+    const other = out.find(x => x.label === 'other')
+    if (other) other.tokens += tokens
+    else out.push({ label: 'other', tokens })
+  }
+  return out
+}
+
+/** Adds one turn's tokens to the by-agent, by-cube and by-model buckets. Never throws. */
+export function attributeTurn(s: Snapshot, t: { agentId?: string; model?: string; usage: any }): Snapshot {
+  try {
+    const u = t?.usage
+    if (!u) return s
+    const tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+    if (!(tokens > 0)) return s
+    const cur = s.usage ?? blankUsage()
+    const b = cur.breakdown ?? blankBreakdown()
+    const agent = t.agentId ? s.agents.find(a => a.id === t.agentId) : undefined
+    const agentLabel = !t.agentId ? 'main' : agent?.description || t.agentId.slice(0, 8)
+    const cubeLabel = agent?.cube ? `${agent.cube.id} ${agent.cube.kind}` : 'main'
+    return {
+      ...s,
+      usage: {
+        ...cur,
+        breakdown: {
+          ...b,
+          byAgent: bump(b.byAgent, agentLabel, tokens),
+          byCube: bump(b.byCube, cubeLabel, tokens),
+          byModel: bump(b.byModel, t.model || 'unknown', tokens),
+        },
+      },
+    }
+  } catch {
+    return s
+  }
+}
+
+/** Keeps the 20 biggest tool results (tokens ≈ chars/4 unless given). Never throws. */
+export function attributeTool(s: Snapshot, r: { tool: string; target: string; tokens?: number; chars?: number }): Snapshot {
+  try {
+    const tokens = Math.round(r.tokens ?? (r.chars ?? 0) / 4)
+    if (!(tokens > 0)) return s
+    const cur = s.usage ?? blankUsage()
+    const top = [...(cur.topTools ?? []), { tool: r.tool, target: String(r.target).slice(0, 160), tokens }]
+      .sort((a, b) => b.tokens - a.tokens)
+      .slice(0, TOP_TOOLS_MAX)
+    return { ...s, usage: { ...cur, topTools: top } }
+  } catch {
+    return s
+  }
+}
+
+/** Maps `$.session.usage({ breakdown: 'summary' })` to context slices; unknown shapes are ignored. */
+export function setContextBreakdown(s: Snapshot, m: any): Snapshot {
+  try {
+    const raw = m?.breakdown ?? m?.context?.breakdown
+    const list: UsageSlice[] = Array.isArray(raw)
+      ? raw.map((x: any) => ({ label: String(x?.label ?? x?.name ?? x?.category ?? ''), tokens: Number(x?.tokens) }))
+      : raw && typeof raw === 'object'
+        ? Object.entries(raw).map(([label, v]: [string, any]) => ({ label, tokens: Number(typeof v === 'object' ? v?.tokens : v) }))
+        : []
+    const context = list.filter(x => x.label && Number.isFinite(x.tokens) && x.tokens > 0).slice(0, SLICES_MAX)
+    if (context.length === 0) return s
+    const cur = s.usage ?? blankUsage()
+    return { ...s, usage: { ...cur, breakdown: { ...(cur.breakdown ?? blankBreakdown()), context } } }
+  } catch {
+    return s
+  }
 }

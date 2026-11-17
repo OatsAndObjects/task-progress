@@ -21,6 +21,9 @@ import {
   randomToken,
   runCommand,
   addTurnUsage,
+  attributeTurn,
+  attributeTool,
+  setContextBreakdown,
   setAgentStatus,
   setMeasure,
   setPlan,
@@ -400,6 +403,12 @@ export async function onToolCall($: any, e: any, out: any) {
         const id = String(e.task_id ?? e.shell_id ?? '')
         if (id) n = setShellStatus(setAgentStatus(n, id, 'stopped', now), id, 'stopped', now)
       }
+      try {
+        const text = typeof out?.text === 'string' ? out.text : typeof out?.result === 'string' ? out.result : out?.result != null ? JSON.stringify(out.result) : ''
+        if (isOk && text) n = attributeTool(n, { tool, target: summarize(tool, e), chars: text.length })
+      } catch {
+        // bookkeeping must not break the call
+      }
       return n
     })
   }
@@ -417,6 +426,11 @@ export async function onAgentSpawn($: any, e: any, out: any) {
       startedAt: now,
       ...(b ? { budgetMin: b.minutes } : {}),
       ...(b && b.step !== null ? { step: b.step } : {}),
+      ...(b?.cubes?.[0]
+        ? { cube: { id: b.cubes[0], kind: 'build' as const } }
+        : b?.review?.[0]
+          ? { cube: { id: b.review[0], kind: 'review' as const } }
+          : {}),
     }
     await mutate($, s => addAgent(s, a))
     if (b?.cubes && b.cubes.length > 0) {
@@ -429,7 +443,14 @@ export async function onAgentSpawn($: any, e: any, out: any) {
 export async function onTurnComplete($: any, e: any) {
   if (e.usage) {
     const at: number = await $.clock.now()
-    await mutate($, s => addTurnUsage(s, e.usage, at))
+    await mutate($, s => attributeTurn(addTurnUsage(s, e.usage, at), { agentId: e.agentId, model: e.model, usage: e.usage }))
+    try {
+      // optional engine API; skipped when the engine lacks it
+      const m = await $.session.usage({ breakdown: 'summary' })
+      await mutate($, s => setContextBreakdown(s, m))
+    } catch {
+      // not available
+    }
   }
   const id = e.agentId as string | undefined
   if (id) {
