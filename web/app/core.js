@@ -103,8 +103,8 @@ TP.renderTop = function (st) {
   txt.textContent = !st ? 'Waiting for Claude' : busy ? 'Working' : 'Idle';
   // Mini meters: state.usage arrives with cube c6. Hidden until then.
   var u = st && st.usage, any = false;
-  [['mm-ctx', 'Context', u && u.context], ['mm-5h', '5h', u && u.fiveHour], ['mm-week', 'Week', u && u.week]].forEach(function (m) {
-    var el = TP.$(m[0]), pct = m[2] && typeof m[2].pct === 'number' ? Math.max(0, Math.min(100, Math.round(m[2].pct))) : null;
+  [['mm-ctx', 'Context', u && u.context], ['mm-5h', '5h', u && u.fiveHour], ['mm-week', 'Week', u && u.weekly]].forEach(function (m) {
+    var el = TP.$(m[0]), pct = m[2] && typeof m[2].percent === 'number' ? Math.max(0, Math.min(100, Math.round(m[2].percent))) : null;
     el.hidden = pct === null;
     if (pct === null) return;
     any = true;

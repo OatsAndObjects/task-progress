@@ -2,8 +2,10 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import type { Snapshot } from '../types/index'
 import {
+  PER_TURN_MAX,
   TOOL_LOG_MAX,
   addAgent,
+  addTurnUsage,
   addShell,
   clearFinished,
   commandFromLine,
@@ -13,6 +15,7 @@ import {
   parseTaskNotification,
   runCommand,
   setAgentStatus,
+  setMeasure,
   setPlan,
   setShellStatus,
   splitLines,
@@ -262,8 +265,6 @@ test('the pane renders every section title', async ($: any, on: any) => {
   }
 })
 
-import { PER_TURN_MAX, addTurnUsage, setMeasure } from './dashboard-model'
-
 test('session.measure fills snapshot.usage', () => {
   const s = setMeasure(
     base(),
@@ -281,6 +282,19 @@ test('session.measure fills snapshot.usage', () => {
   expect(s.usage?.fiveHour).toEqual({ percent: 40, resetsAt: 'a' })
   expect(s.usage?.weekly).toEqual({ percent: 10, resetsAt: 'b' })
   expect(s.usage?.cost).toEqual({ usd: 1.5 })
+})
+
+test('missing or NaN percentUsed gives a null window, never NaN', () => {
+  const s = setMeasure(
+    base(),
+    { context: { window: 10, percent: NaN }, rateLimits: [{ kind: 'five_hour' }, { kind: 'seven_day', percentUsed: NaN }], cost: { usd: NaN } },
+    1,
+  )
+  expect(s.usage?.fiveHour).toBeNull()
+  expect(s.usage?.weekly).toBeNull()
+  expect(s.usage?.context.percent).toBeNull()
+  expect(s.usage?.cost).toBeNull()
+  expect(JSON.stringify(s)).not.toContain('NaN')
 })
 
 test('empty rateLimits give null windows', () => {

@@ -7,7 +7,6 @@ import type {
   ShellStatus,
   Snapshot,
   SnapshotUsage,
-  SnapshotUsage,
   SnapshotPlanStep,
   UserTask,
   UserTaskPriority,
@@ -68,16 +67,17 @@ export function setMeasure(s: Snapshot, m: any, now: number): Snapshot {
   const limits: any[] = Array.isArray(m?.rateLimits) ? m.rateLimits : []
   const pick = (kind: string) => {
     const r = limits.find(x => x?.kind === kind)
-    return r ? { percent: Number(r.percentUsed), resetsAt: r.resetsAt ? String(r.resetsAt) : null } : null
+    const percent = r ? Number(r.percentUsed) : NaN
+    return Number.isFinite(percent) ? { percent, resetsAt: r.resetsAt ? String(r.resetsAt) : null } : null
   }
   return {
     ...s,
     usage: {
       ...u,
-      context: { tokens: m?.context?.tokens ?? null, window: Number(m?.context?.window ?? 0), percent: m?.context?.percent ?? null },
+      context: { tokens: m?.context?.tokens ?? null, window: Number(m?.context?.window) || 0, percent: Number.isFinite(m?.context?.percent) ? m.context.percent : null },
       fiveHour: pick('five_hour'),
       weekly: pick('seven_day'),
-      cost: typeof m?.cost?.usd === 'number' ? { usd: m.cost.usd } : null,
+      cost: Number.isFinite(m?.cost?.usd) ? { usd: m.cost.usd } : null,
       updatedAt: now,
     },
   }
@@ -86,6 +86,7 @@ export function setMeasure(s: Snapshot, m: any, now: number): Snapshot {
 /** Adds one turn's token usage to the session totals and the per-turn list. */
 export function addTurnUsage(s: Snapshot, t: any, now: number): Snapshot {
   if (!t) return s
+  // Executor (sub-agent) turns are counted in the session totals on purpose.
   const u = s.usage ?? blankUsage()
   const input = t.input_tokens ?? 0
   const output = t.output_tokens ?? 0
