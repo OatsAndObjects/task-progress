@@ -35,6 +35,8 @@ import {
   touchFile,
   type CommandDeps,
 } from './dashboard-model'
+import { seedHistory } from './dash-mirror'
+import { filesDeps, runFileCommand } from './dash-files'
 import { answerCube, applyReview, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviseCube, withBoard } from './cubes-model'
 import type { CubeBoard } from '../types/index'
 
@@ -112,6 +114,11 @@ function ago(ms: number): string {
 function cut(s: string, n: number): string {
   return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s
 }
+
+/** The running web server, for the conversation mirror (hooks/dash-mirror.ts). */
+export const webTarget = (): { port: number; token: string } | null => (c.web ? { port: c.web.port, token: c.web.token } : null)
+/** Set by register.tsx: runs once each time the web server becomes ready. */
+export const webReady: { fn?: ($: any) => void } = {}
 
 const c: DashCtx = { snap: null, flushTimer: undefined, poll: undefined, web: null, starting: null }
 
@@ -223,6 +230,10 @@ function deps($: any, nowMs: number): CommandDeps {
 
 /** One command from the pane or the web app. */
 async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandResult> {
+  if (typeof cmd.action === 'string' && cmd.action.startsWith('file.')) {
+    const fr = await runFileCommand(cmd as any, await filesDeps($))
+    if (fr) return fr
+  }
   await load($)
   return runCommand(cmd, deps($, await $.clock.now()))
 }
@@ -250,7 +261,7 @@ async function postResult($: any, w: Web, id: string, r: DashboardCommandResult)
     await $.http.fetch(`http://127.0.0.1:${w.port}/api/result`, {
       method: 'POST',
       headers: { 'X-TP-Token': w.token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, ok: r.ok, message: r.message }),
+      body: JSON.stringify({ id, ok: r.ok, message: r.message, data: r.data }),
     })
   } catch {
     // the browser times out on its own
@@ -302,6 +313,7 @@ function startWeb($: any): Promise<Web | null> {
               await $.state.set(webRef, { port, url: web.url })
               await load($)
               void postSnapshot($)
+              void seedHistory($)
               settle(web)
             } else if (msg?.type === 'command' && web) {
               // The command's own id goes back with the result; the target id is args.id.

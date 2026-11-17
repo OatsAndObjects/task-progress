@@ -193,7 +193,7 @@ export type Snapshot = {
 }
 /** A dashboard command, from the pane or the web bridge: `{ action, ...args }`. */
 export type DashboardCommand = { action: string; [arg: string]: unknown }
-export type DashboardCommandResult = { ok: boolean; message: string }
+export type DashboardCommandResult = { ok: boolean; message: string; data?: Record<string, unknown> }
 /** The running web bridge, if any. */
 export type DashboardWeb = { port: number; url: string }
 

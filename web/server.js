@@ -119,10 +119,10 @@ function sendJson(res, status, obj) {
   send(res, status, JSON.stringify(obj));
 }
 
-function readBody(req) {
+function readBody(req, max = MAX_BODY) {
   return new Promise((resolve, reject) => {
     const declared = parseInt(req.headers['content-length'] || '0', 10);
-    if (declared > MAX_BODY) {
+    if (declared > max) {
       reject(Object.assign(new Error('body too large'), { status: 413 }));
       req.resume();
       return;
@@ -133,7 +133,7 @@ function readBody(req) {
     req.on('data', (c) => {
       if (failed) return;
       size += c.length;
-      if (size > MAX_BODY) {
+      if (size > max) {
         failed = true;
         reject(Object.assign(new Error('body too large'), { status: 413 }));
         return;
@@ -272,6 +272,20 @@ const COMMANDS = {
   'task.send': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
   'prompt.send': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
   'orchestrate.set': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
+
+  // ---- files (read / diff / open in an editor); the mod confines paths to the session cwd ----
+  'file.read': (a) => (isText(a.path, 1024) ? { args: { path: a.path } } : { error: 'path required (max 1024 chars)' }),
+  'file.diff': (a) => (isText(a.path, 1024) ? { args: { path: a.path } } : { error: 'path required (max 1024 chars)' }),
+  'file.open': (a) => {
+    if (!isText(a.path, 1024)) return { error: 'path required (max 1024 chars)' };
+    if (a.editor !== 'vscode' && a.editor !== 'studio') return { error: 'editor must be vscode or studio' };
+    const out = { path: a.path, editor: a.editor };
+    if (a.line !== undefined && a.line !== null && a.line !== '') {
+      if (!Number.isInteger(a.line) || a.line < 1 || a.line > 10000000) return { error: 'line must be a positive whole number' };
+      out.line = a.line;
+    }
+    return { args: out };
+  },
 
   // ---- cube flow board ----
   'cube.approve': (a) => (isCubeId(a.id) ? { args: { id: a.id.trim() } } : { error: 'id required (max 40 chars)' }),
@@ -591,7 +605,7 @@ async function handle(req, res) {
     case 'POST /api/result': {
       let body;
       try {
-        body = await readBody(req);
+        body = await readBody(req, 4 * 1024 * 1024); // file.read data can be ~1 MB once escaped
       } catch (e) {
         return sendJson(res, e.status || 400, { ok: false, message: e.message });
       }
@@ -603,7 +617,9 @@ async function handle(req, res) {
       pending.delete(body.id);
       clearTimeout(entry.timer);
       const message = body.message === undefined || body.message === null ? '' : String(body.message).slice(0, 2000);
-      sendJson(entry.res, 200, { ok: body.ok === true, message });
+      const reply = { ok: body.ok === true, message };
+      if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) reply.data = body.data;
+      sendJson(entry.res, 200, reply);
       return sendJson(res, 200, { ok: true });
     }
 
