@@ -54,12 +54,12 @@
     '@media (max-width:640px){#screen-cubes .lanes{gap:48px}#screen-cubes .lane{width:min(320px,82vw)}.cdrawer{padding:var(--s4)}}'
   ].join('\n');
 
-  var SLAB = { proposed: 'Proposed', approved: 'Approved', queued: 'Queued', running: 'Running', reviewing: 'PR review', done: 'Done', rejected: 'Rejected' };
-  var SCHIP = { proposed: '', approved: 'blue', queued: 'blue', running: 'blue', reviewing: 'warn', done: 'ok', rejected: 'bad' };
-  var LIFE = { proposed: 0, rejected: 0, approved: 1, queued: 1, running: 2, reviewing: 3, done: 5 };
+  var SLAB = { proposed: 'Proposed', approved: 'Approved', queued: 'Queued', running: 'Running', reviewing: 'PR review', done: 'Done', failed: 'Failed', skipped: 'Skipped', rejected: 'Rejected', revising: 'Revising' };
+  var SCHIP = { proposed: '', approved: 'blue', queued: 'blue', running: 'blue', reviewing: 'warn', done: 'ok', failed: 'bad', skipped: '', rejected: 'bad', revising: 'warn' };
+  var LIFE = { proposed: 0, rejected: 0, failed: 0, skipped: 0, revising: 0, approved: 1, queued: 1, running: 2, reviewing: 3, done: 5 };
   var PAL = ['#7DD3FC', '#A5B4FC', '#5EEAB4', '#F59E0B', '#F472B6', '#FB923C', '#C4B5FD', '#86EFAC'];
   var colors = {};
-  var openId = null, confirming = {}, drawer = null, askText = '', cubesById = {};
+  var openId = null, confirming = {}, drawer = null, askText = '', cubesById = {}, qaMap = {};
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function arr(x) { return Array.isArray(x) ? x : []; }
@@ -153,7 +153,7 @@
 
   function cubeCard(c) {
     var st = status(c), id = esc(c.id), prim;
-    if (st === 'proposed' || st === 'rejected') prim = '<button class="btn pri" data-cact="approve" data-id="' + id + '">Approve</button>';
+    if (st === 'proposed' || st === 'rejected' || st === 'failed') prim = '<button class="btn pri" data-cact="approve" data-id="' + id + '">Approve</button>';
     else if (st === 'reviewing') prim = '<button class="btn pri" data-cact="open" data-id="' + id + '">Read PR review</button>';
     else prim = '<button class="btn pri" data-cact="open" data-id="' + id + '">Open details</button>';
     var cls = st === 'reviewing' && c.review && /REQUEST/.test(verdictLabel(c.review.verdict)) ? 'changes' : st;
@@ -197,6 +197,7 @@
     root._list = list;
     var cs = state && state.cubes, task = cs && !Array.isArray(cs) && cs.task;
     if (!list.length) {
+      root._html = null;
       root.innerHTML = '<div class="ph"><div><h1>Cubes</h1><p>Small steps Claude proposes. Approve one and it runs; a PR review checks it before it counts as done.</p></div></div><div class="card cempty"><h3>No cubes planned</h3><p>When Claude plans work in cubes, you will approve them here.</p></div>';
       refreshDrawer();
       return;
@@ -210,10 +211,14 @@
       h += '<div class="lane"><h3><b>&#10022;</b>Stage ' + (i + 1) + '</h3>' + col.map(cubeCard).join('') + '</div>';
     });
     h += '</div></div>';
-    var sc = root.scrollTop;
-    root.innerHTML = h;
-    root.scrollTop = sc;
-    requestAnimationFrame(function () { drawDeps(root); });
+    if (root._html !== h) {
+      var sc = root.scrollTop, lw = root.querySelector('.lanes') && root.querySelector('.lanes').parentNode, sl = lw ? lw.scrollLeft : 0;
+      root._html = h;
+      root.innerHTML = h;
+      root.scrollTop = sc;
+      var lw2 = root.querySelector('.lanes'); if (lw2 && lw2.parentNode) lw2.parentNode.scrollLeft = sl;
+      requestAnimationFrame(function () { drawDeps(root); });
+    }
     refreshDrawer();
   }
 
@@ -238,7 +243,7 @@
       (c.minutes ? '<span class="faint">' + esc(c.minutes) + ' min</span>' : '') + '</div><h2>' + esc(c.title) + '</h2>';
     if (c.action) h += '<p class="muted">' + esc(c.action) + '</p>';
     var acts = '';
-    if (st === 'proposed' || st === 'rejected') acts += '<button class="btn pri sm" data-cact="approve" data-id="' + id + '">Approve</button>';
+    if (st === 'proposed' || st === 'rejected' || st === 'failed') acts += '<button class="btn pri sm" data-cact="approve" data-id="' + id + '">Approve</button>';
     if (st === 'reviewing') acts += '<button class="btn pri sm" data-cact="markDone" data-id="' + id + '">Mark done</button>';
     if (st === 'done' || st === 'reviewing') acts += '<button class="btn sm" data-cact="review" data-id="' + id + '">Run review</button>';
     if (st === 'proposed' || st === 'rejected' || st === 'approved') {
@@ -280,7 +285,7 @@
     });
     arr(r.quiz).forEach(function (q, qi) {
       h += '<div class="q"><h5>' + (qi + 1) + '. ' + esc(q.q) + '</h5>' + arr(q.options).map(function (o, oi) {
-        var a = (c._qa || {})[qi], cl = a == null ? '' : (oi === q.answer ? 'right' : (oi === a ? 'wrong' : ''));
+        var a = qaMap[c.id + ':' + qi], cl = a == null ? '' : (oi === q.answer ? 'right' : (oi === a ? 'wrong' : ''));
         return '<button class="opt ' + cl + '" data-cact="quiz" data-id="' + esc(c.id) + '" data-q="' + qi + '" data-o="' + oi + '"' + (a != null ? ' disabled' : '') + '>' + 'ABCD'.charAt(oi) + '. ' + esc(o) + '</button>';
       }).join('') + '</div>';
     });
@@ -301,10 +306,10 @@
     if (!drawer || !openId || !drawer.classList.contains('on')) return;
     var c = cubesById[openId];
     if (!c) { drawer.classList.remove('on'); return; }
-    var ta = TP.$('cube-ask'), focus = ta && document.activeElement === ta, sc = drawer.scrollTop;
+    var ta = TP.$('cube-ask'), focus = ta && document.activeElement === ta, ss = ta ? ta.selectionStart : 0, se = ta ? ta.selectionEnd : 0, sc = drawer.scrollTop;
     drawer.innerHTML = drawerHtml(c);
     drawer.scrollTop = sc;
-    if (focus) { var t2 = TP.$('cube-ask'); if (t2) { t2.focus(); t2.setSelectionRange(t2.value.length, t2.value.length); } }
+    if (focus) { var t2 = TP.$('cube-ask'); if (t2) { t2.focus(); t2.setSelectionRange(ss, se); } }
   }
 
   function cmd(type, payload) {
@@ -326,7 +331,7 @@
     if (a === 'yes') { var t = confirming[id]; delete confirming[id]; return cmd(t === 'reject' ? 'cube.reject' : 'cube.delete', { id: id }); }
     if (a === 'quiz') {
       var c = cubesById[id]; if (!c) return;
-      c._qa = c._qa || {}; c._qa[+b.getAttribute('data-q')] = +b.getAttribute('data-o');
+      qaMap[id + ':' + b.getAttribute('data-q')] = +b.getAttribute('data-o');
       return refreshDrawer();
     }
     if (a === 'sendAsk' || a === 'sendChange') {

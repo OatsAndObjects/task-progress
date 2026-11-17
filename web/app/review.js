@@ -277,8 +277,8 @@
       var t = e.target;
       if (t.matches && t.matches('.cmt textarea') && !t.value.trim()) {
         var box = t.closest('.cmt'); if (!box) return;
-        var ck = box.dataset.ck;
-        setTimeout(function () { var cc = cm(); if (cc[ck] !== undefined && !String(cc[ck]).trim() && document.activeElement !== t) { delete cc[ck]; if (box.parentNode) box.remove(); markNums(); } }, 120);
+        var ck = box.dataset.ck, cid = cur && cur.id;
+        setTimeout(function () { var cc = cid ? (comments[cid] || {}) : {}; if (cc[ck] !== undefined && !String(cc[ck]).trim() && document.activeElement !== t) { delete cc[ck]; if (box.parentNode) box.remove(); markNums(); } }, 120);
       }
     });
     built = true;
@@ -403,7 +403,7 @@
     if (m) ui.tab = m;
     if (p[2] === 'split') ui.mode = 's';
     if (p[2] === 'unified') ui.mode = 'u';
-    if (p[3] === 'comment') demoComment = true;
+    if (p[3] === 'comment' && TP.demoMode) demoComment = true;
   }
 
   TP.screens.review = {

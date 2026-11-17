@@ -131,7 +131,7 @@
     return fl;
   }
   function rank(list) {
-    var rows = (Array.isArray(list) ? list : []).map(function (r) { return { label: String((r && r.label) || 'Unknown'), tokens: Math.max(0, +(r && r.tokens) || 0) }; }).filter(function (r) { return r.tokens > 0; });
+    var rows = (Array.isArray(list) ? list : []).map(function (r) { return { label: String((r && r.label) || 'Unknown'), tokens: Math.max(0, +(r && r.tokens) || 0) }; }).filter(function (r) { return isFinite(r.tokens) && r.tokens > 0; });
     rows.sort(function (a, b) { return b.tokens - a.tokens; });
     if (rows.length > 9) { var rest = rows.slice(8); rows = rows.slice(0, 8).concat([{ label: 'Other (' + rest.length + ')', tokens: rest.reduce(function (a, r) { return a + r.tokens; }, 0) }]); }
     var p = shares(rows.map(function (r) { return r.tokens; }));
@@ -150,7 +150,7 @@
     var rows = rank(bd && bd[tab]);
     var tabs = '<div class="tabs" role="tablist">' + TABS.map(function (x) { return '<button role="tab" data-tab="' + x[0] + '" class="' + (x[0] === tab ? 'on' : '') + '" aria-selected="' + (x[0] === tab) + '">' + x[1] + '</button>'; }).join('') + '</div>';
     var body = rows.length ? '<p class="why">' + esc(explainTop(rows, tab)) + '</p>' + rows.map(function (r) {
-      return '<div class="bk"><span class="l" title="' + esc(r.label) + '">' + esc(r.label) + '</span><span class="t"><i style="width:' + Math.max(2, r.pct) + '%"></i></span><span class="v">' + esc(num(r.tokens)) + '<span>' + r.pct + '%</span></span></div>';
+      return '<div class="bk"><span class="l" title="' + esc(r.label) + '">' + esc(r.label) + '</span><span class="t"><i style="width:' + (r.pct > 0 ? Math.max(2, r.pct) : 0) + '%"></i></span><span class="v">' + esc(num(r.tokens)) + '<span>' + r.pct + '%</span></span></div>';
     }).join('') : '<p class="muted">Token split appears once Claude has run a few turns.</p>';
     return '<h3>Where tokens went</h3>' + tabs + body;
   }
@@ -161,7 +161,6 @@
       return '<div class="tool"><b>' + esc(r.tool) + '</b><span class="g" title="' + esc(r.target) + '">' + esc(r.target) + '</span><span class="v">' + esc(num(r.tokens)) + '</span></div>';
     }).join('');
   }
-  window.__tpShares = shares;
 
   TP.screens.usage = {
     render: function (state) {

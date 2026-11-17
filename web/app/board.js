@@ -111,7 +111,7 @@
     return true;
   }
   function renderCols(state) {
-    var host = document.getElementById('tpb-cols'); if (!host) return;
+    var host = document.getElementById('tpb-cols'); if (!host || drag) return;
     var list = lastTickets.filter(visible), keys = cols(state);
     var sx = host.scrollLeft;
     host.innerHTML = keys.map(function (k) {
@@ -153,7 +153,7 @@
     });
     cols_.addEventListener('drop', function (e) {
       var c = e.target.closest('.col'); if (!c || !drag) return;
-      e.preventDefault(); var k = drag; drag = null; moveTicket(k, c.dataset.col);
+      e.preventDefault(); var k = drag; drag = null; cols_.querySelectorAll('.over,.dragging').forEach(function (x) { x.classList.remove('over', 'dragging'); }); moveTicket(k, c.dataset.col);
     });
     cols_.addEventListener('dragend', function () { drag = null; cols_.querySelectorAll('.over,.dragging').forEach(function (x) { x.classList.remove('over', 'dragging'); }); });
     built = true;

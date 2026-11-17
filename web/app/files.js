@@ -120,7 +120,8 @@
     var sig = JSON.stringify([sel, collapsed, files.map(function (f) { return [f.path, f.op, f.count, ago(f.lastAt)]; })]);
     if (sig === treeSig) return;
     treeSig = sig;
-    var st = el.scrollTop;
+    var st = el.scrollTop, ae = document.activeElement, fp = null, fd = null;
+    if (ae && el.contains(ae)) { fp = ae.getAttribute('data-path'); fd = ae.getAttribute('data-dir'); }
     el.innerHTML = files.length ? G.order.map(function (d) {
       var shut = !!collapsed[d];
       return '<button class="fold' + (shut ? ' shut' : '') + '" data-dir="' + esc(d) + '" aria-expanded="' + (!shut) + '"><span class="car">&#9660;</span><span class="t">' + esc(d) + '/</span></button>' +
@@ -131,6 +132,12 @@
         }).join(''));
     }).join('') : '<div class="none" style="padding:var(--s5)"><div><h3>No files yet</h3><p>Files Claude changes will show up here.</p></div></div>';
     el.scrollTop = st;
+    if (fp != null || fd != null) {
+      var bs = el.querySelectorAll('button');
+      for (var bi = 0; bi < bs.length; bi++) {
+        if ((fp != null && bs[bi].getAttribute('data-path') === fp) || (fd != null && bs[bi].getAttribute('data-dir') === fd)) { try { bs[bi].focus({ preventScroll: true }); } catch (_) {} break; }
+      }
+    }
   }
 
   // ---- preview ----
@@ -142,10 +149,11 @@
       if (f.content == null && !TP.demoMode) {
         var c = cache[k];
         TP.send('file.read', { path: f.path }).then(function (r) {
+          if (!r || !r.ok) { c.state = 'na'; if (norm(f.path) === sel) drawPrev(true); return; }
           if (r.ok && r.data && r.data.content != null) { c.content = String(r.data.content); c.state = 'ok'; } else c.state = 'na';
           if (r.data && r.data.diff != null && c.diff == null) c.diff = String(r.data.diff);
           if (norm(f.path) === sel) drawPrev(true);
-        });
+        }).catch(function () { c.state = 'na'; if (norm(f.path) === sel) drawPrev(true); });
       } else if (f.content == null) c.state = 'na';
     }
     return cache[k];
@@ -154,9 +162,9 @@
     if (c.diff != null || c.diffTried || TP.demoMode) return;
     c.diffTried = true;
     TP.send('file.diff', { path: f.path }).then(function (r) {
-      if (r.ok && r.data && r.data.diff) c.diff = String(r.data.diff);
+      if (r && r.ok && r.data && r.data.diff) c.diff = String(r.data.diff);
       if (norm(f.path) === sel) drawPrev(true);
-    });
+    }).catch(function () { if (norm(f.path) === sel) drawPrev(true); });
   }
   function codeHtml(text) {
     return '<div class="code" tabindex="0">' + String(text).replace(/\n$/, '').split('\n').map(function (l, i) {
