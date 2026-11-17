@@ -276,6 +276,11 @@ const COMMANDS = {
   // ---- session: a prompt typed on the web, and Stop for the running turn ----
   'session.prompt': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
   'session.stop': () => ({ args: {} }),
+  'perm.answer': (a) => {
+    if (typeof a.id !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(a.id)) return { error: 'id required (max 64 safe chars)' };
+    if (!['allow', 'allowAlways', 'deny'].includes(a.decision)) return { error: 'decision must be allow, allowAlways or deny' };
+    return { args: { id: a.id, decision: a.decision } };
+  },
 
   // ---- files (read / diff / open in an editor); the mod confines paths to the session cwd ----
   'file.read': (a) => (isText(a.path, 1024) ? { args: { path: a.path } } : { error: 'path required (max 1024 chars)' }),
@@ -548,6 +553,9 @@ async function handle(req, res) {
       req.on('close', () => sseClients.delete(res));
       return;
     }
+
+    case 'GET /api/clients':
+      return sendJson(res, 200, { ok: true, pages: streamClients.size });
 
     case 'GET /api/stream':
       return handleStream(req, res, url);

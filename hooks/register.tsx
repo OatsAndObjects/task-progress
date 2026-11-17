@@ -20,7 +20,8 @@ import {
   registerDashboard,
   webTarget,
 } from './dashboard'
-import { mirrorToolStart, mirrorTurnEnd, registerMirror } from './dash-mirror'
+import { registerPerm } from './dash-perm'
+import { mirrorToolStart,mirrorTurnEnd, registerMirror } from './dash-mirror'
 import { parseBudget } from './dashboard-model'
 import { buildBoard, gateCheck, topoOrder } from './cubes-model'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
@@ -485,6 +486,7 @@ export const register: Register = on => {
   // The session dashboard: /tp-dashboard and its pane. Its collectors ride on the hooks below.
   registerDashboard(on)
   registerMirror(on, webTarget)
+  registerPerm(on, webTarget)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({

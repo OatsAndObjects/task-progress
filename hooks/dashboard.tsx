@@ -36,7 +36,8 @@ import {
   type CommandDeps,
 } from './dashboard-model'
 import { seedHistory } from './dash-mirror'
-import { filesDeps, runFileCommand } from './dash-files'
+import { answerPerm } from './dash-perm'
+import { filesDeps,runFileCommand } from './dash-files'
 import { onSessionTurnComplete, runSessionCommand, sessionState } from './dash-session'
 import { answerCube, applyReview, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviseCube, withBoard } from './cubes-model'
 import type { CubeBoard } from '../types/index'
@@ -252,6 +253,7 @@ async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandR
     })
     if (sr) return sr
   }
+  if (cmd.action === 'perm.answer') return answerPerm(cmd as any)
   if (typeof cmd.action === 'string' && cmd.action.startsWith('file.')) {
     const fr = await runFileCommand(cmd as any, await filesDeps($))
     if (fr) return fr
