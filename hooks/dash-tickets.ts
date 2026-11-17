@@ -17,6 +17,8 @@ export type TicketDeps = {
   put: (s: Snapshot) => void
   /** Highest ticket number ever issued. */
   counter: () => number
+  /** The persisted store (full text), when readable. */
+  stored?: () => Promise<TicketStore | null>
   /** Persist the list and counter. */
   save: (store: TicketStore) => Promise<void>
   /** Submit a prompt as the user. */
@@ -82,22 +84,60 @@ function checksArg(v: unknown): { text: string; done: boolean }[] | null {
   return out
 }
 
-/** One ticket.* command. Returns null when the action is not a ticket command. Never throws. */
-export async function ticketCommand(cmd: DashboardCommand, d: TicketDeps): Promise<DashboardCommandResult | null> {
-  if (typeof cmd.action !== 'string' || !cmd.action.startsWith('ticket.')) return null
+const SNAP_MAX_BYTES = 900_000
+const LADDER = [
+  { act: 20, doneAct: 20, text: 500, desc: 2000 },
+  { act: 20, doneAct: 0, text: 500, desc: 2000 },
+  { act: 5, doneAct: 0, text: 200, desc: 2000 },
+  { act: 0, doneAct: 0, text: 0, desc: 500 },
+  { act: 0, doneAct: 0, text: 0, desc: 0 },
+]
+
+/** The tickets as the snapshot carries them: bounded so the web POST stays under its body limit. The store keeps the full text. */
+export function snapshotTickets(list: Ticket[], maxBytes = SNAP_MAX_BYTES): Ticket[] {
+  let out = list
+  for (const l of LADDER) {
+    out = list.map(t => {
+      const n = t.status === 'done' ? l.doneAct : l.act
+      return {
+        ...t,
+        description: t.description.length > l.desc ? t.description.slice(0, l.desc) + (l.desc ? '…' : '') : t.description,
+        activity: (n ? t.activity.slice(-n) : []).map(a => ({ ...a, text: a.text.slice(0, l.text) })),
+      }
+    })
+    if (JSON.stringify(out).length <= maxBytes) return out
+  }
+  return out
+}
+
+let queue: Promise<unknown> = Promise.resolve()
+
+/** One ticket.* command. Returns null when the action is not a ticket command. Never throws. Commands run one at a time. */
+export function ticketCommand(cmd: DashboardCommand, d: TicketDeps): Promise<DashboardCommandResult | null> {
+  if (typeof cmd.action !== 'string' || !cmd.action.startsWith('ticket.')) return Promise.resolve(null)
+  const run = queue.then(() => ticketCommandNow(cmd, d))
+  queue = run.catch(() => undefined)
+  return run
+}
+
+async function ticketCommandNow(cmd: DashboardCommand, d: TicketDeps): Promise<DashboardCommandResult | null> {
   try {
     const s = d.get()
-    const list = s.tickets ?? []
-    let counter = d.counter()
+    // The store holds the full list; the snapshot copy is bounded. Never trust module state for the counter.
+    const stored = d.stored ? await d.stored() : null
+    const list = stored && Array.isArray(stored.list) ? stored.list : (s.tickets ?? [])
+    const maxN = list.reduce((m, t) => Math.max(m, Number(String(t.key).slice(3)) || 0), 0)
+    let counter = Math.max(d.counter(), Number(stored?.counter) || 0, maxN)
     const now = d.now()
     const commit = async (next: Ticket[]) => {
-      d.put({ ...s, tickets: next, columns: TICKET_COLUMNS })
       await d.save({ list: next, counter })
+      d.put({ ...d.get(), tickets: snapshotTickets(next), columns: TICKET_COLUMNS })
     }
-    const sendToClaude = async (t: Ticket): Promise<Ticket> => {
-      const logged = log(t, 'you', 'Sent to Claude', d.now())
-      await d.submit(ticketPrompt(logged))
-      return logged
+    /** Saves first, then sends the prompt, then records that it was sent. */
+    const sendToClaude = async (t: Ticket, base: Ticket[], replaceIn: (list: Ticket[], nt: Ticket) => Ticket[]): Promise<Ticket> => {
+      await commit(replaceIn(base, t))
+      await d.submit(ticketPrompt(t))
+      return log(t, 'you', 'Sent to Claude', d.now())
     }
     if (cmd.action === 'ticket.create') {
       const title = str(cmd.title, 200)
@@ -119,7 +159,7 @@ export async function ticketCommand(cmd: DashboardCommand, d: TicketDeps): Promi
         createdAt: now,
         updatedAt: now,
       }
-      if (t.assignee === 'claude') t = await sendToClaude(t)
+      if (t.assignee === 'claude') t = await sendToClaude(t, list, (l, nt) => [...l, nt])
       await commit([...list, t])
       return ok(`ticket created: ${t.key}`, { key: t.key })
     }
@@ -182,7 +222,7 @@ export async function ticketCommand(cmd: DashboardCommand, d: TicketDeps): Promi
         const assignee = str(cmd.assignee, 60)
         if (assignee === t.assignee) return ok(`ticket ${t.key} assignee unchanged`)
         let n = log({ ...t, assignee }, 'you', assignee ? `Assigned to ${assignee}` : 'Unassigned', now)
-        if (assignee === 'claude') n = await sendToClaude(n)
+        if (assignee === 'claude') n = await sendToClaude(n, list, (l, nt) => l.map(x => (x.key === nt.key ? nt : x)))
         await commit(replace(n))
         return ok(`ticket ${t.key} assigned to ${assignee || 'nobody'}`)
       }

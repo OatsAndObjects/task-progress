@@ -38,7 +38,7 @@ import {
 import { seedHistory } from './dash-mirror'
 import { newOpenState, openOnce, type OpenDeps } from './dash-open'
 import { answerPerm } from './dash-perm'
-import { loadTickets, ticketCommand } from './dash-tickets'
+import { loadTickets, snapshotTickets, ticketCommand } from './dash-tickets'
 import { filesDeps,runFileCommand } from './dash-files'
 import { onSessionTurnComplete, runSessionCommand, sessionState } from './dash-session'
 import { answerCube, applyReview, finishAndRelease, flowLabel, markRunning, normalizeBoardFlow, reviseCube, withBoard } from './cubes-model'
@@ -125,6 +125,7 @@ export const webTarget = (): { port: number; token: string } | null => (c.web ? 
 export const webReady: { fn?: ($: any) => void } = {}
 
 let ticketCounter = 0
+let snapTooBigLogged = false
 const c: DashCtx = { snap: null, flushTimer: undefined, poll: undefined, web: null, starting: null }
 
 async function load($: any): Promise<Snapshot> {
@@ -144,11 +145,15 @@ async function postSnapshot($: any) {
   const w = c.web
   if (!w || !c.snap) return
   try {
-    await $.http.fetch(`http://127.0.0.1:${w.port}/api/snapshot`, {
+    const res: any = await $.http.fetch(`http://127.0.0.1:${w.port}/api/snapshot`, {
       method: 'POST',
       headers: { 'X-TP-Token': w.token, 'Content-Type': 'application/json' },
       body: JSON.stringify(c.snap),
     })
+    if (res && res.status === 413 && !snapTooBigLogged) {
+      snapTooBigLogged = true
+      console.error('task-progress: dashboard snapshot rejected as too large (413)')
+    }
   } catch {
     // the server may be gone; its exit clears the bridge
   }
@@ -269,6 +274,10 @@ async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandR
       get: () => c.snap!,
       put: s => put($, s),
       counter: () => ticketCounter,
+      stored: async () => {
+        const v: any = await $.store.get('tickets')
+        return v && Array.isArray(v.list) ? v : null
+      },
       save: async st => {
         ticketCounter = st.counter
         await $.store.set('tickets', st)
@@ -463,7 +472,7 @@ export async function onSessionStart($: any, e: any) {
   try {
     const lt = loadTickets(await $.store.get('tickets'), tasks)
     ticketCounter = lt.store.counter
-    c.snap = { ...c.snap, tickets: lt.store.list }
+    c.snap = { ...c.snap, tickets: snapshotTickets(lt.store.list) }
     if (lt.migrated) await $.store.set('tickets', lt.store)
   } catch {
     // tickets are optional; the board shows empty
