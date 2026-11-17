@@ -443,8 +443,8 @@ export async function onAgentSpawn($: any, e: any, out: any) {
 export async function onTurnComplete($: any, e: any) {
   if (e.usage) {
     const at: number = await $.clock.now()
-    await mutate($, s => attributeTurn(addTurnUsage(s, e.usage, at), { agentId: e.agentId, model: e.model, usage: e.usage }))
-    try {
+    await mutate($, s => attributeTurn(addTurnUsage(s, e.usage, at), { agentId: e.agentId, model: e.usage?.model, usage: e.usage }))
+    if (!e.agentId) try {
       // optional engine API; skipped when the engine lacks it
       const m = await $.session.usage({ breakdown: 'summary' })
       await mutate($, s => setContextBreakdown(s, m))

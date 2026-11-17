@@ -347,6 +347,29 @@ test('top tools capped at 20 and sorted; context breakdown maps or is skipped', 
   expect(t[0]).toEqual({ tool: 'Read', target: 'f30', tokens: 3000 })
   expect(t.map(x => x.tokens)).toEqual([...t.map(x => x.tokens)].sort((a, b) => b - a))
   expect(setContextBreakdown(s, { nothing: 1 })).toBe(s)
-  const c = setContextBreakdown(s, { breakdown: [{ label: 'tools', tokens: 5 }] })
-  expect(c.usage!.breakdown!.context).toEqual([{ label: 'tools', tokens: 5 }])
+  const categories = [
+    { name: 'System prompt', tokens: 5, color: 'a', isDeferred: false, kind: 'used' },
+    { name: 'Messages', tokens: 90, color: 'b', isDeferred: false, kind: 'used' },
+    { name: 'Deferred tools', tokens: 7, color: 'c', isDeferred: true, kind: 'deferred' },
+    { name: 'Free space', tokens: 800, color: 'd', isDeferred: false, kind: 'free' },
+    { name: 'Autocompact buffer', tokens: 33, color: 'e', isDeferred: false, kind: 'buffer' },
+  ]
+  const c = setContextBreakdown(s, { context: { totalTokens: 100, maxTokens: 1000, percentage: 10, breakdown: { categories } } })
+  expect(c.usage!.breakdown!.context).toEqual([{ label: 'System prompt', tokens: 5 }, { label: 'Messages', tokens: 90 }])
+  expect(setContextBreakdown(s, { context: { totalTokens: 1, maxTokens: 2 } })).toBe(s)
+})
+
+test('byModel from usage.model, cap 40 incl other, non-main without cube is unattributed', () => {
+  let s = base()
+  for (let i = 0; i < 50; i++) {
+    const usage = { input_tokens: 1, output_tokens: 0, model: 'm' + i }
+    s = attributeTurn(s, { model: usage.model, usage })
+  }
+  const m = s.usage!.breakdown!.byModel
+  expect(m.length).toBe(40)
+  expect(m[39]).toEqual({ label: 'other', tokens: 11 })
+  const u = { input_tokens: 2, output_tokens: 0 }
+  s = attributeTurn(s, { agentId: 'abcdef123456', model: 'x', usage: u })
+  expect(s.usage!.breakdown!.byCube).toContainEqual({ label: 'unattributed', tokens: 2 })
+  expect(s.usage!.breakdown!.byAgent).toContainEqual({ label: 'abcdef12', tokens: 2 })
 })

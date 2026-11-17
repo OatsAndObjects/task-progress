@@ -448,7 +448,7 @@ function bump(list: UsageSlice[] | undefined, label: string, tokens: number): Us
   const out = (list ?? []).map(x => ({ ...x }))
   const hit = out.find(x => x.label === label)
   if (hit) hit.tokens += tokens
-  else if (out.length < SLICES_MAX) out.push({ label, tokens })
+  else if (out.length < SLICES_MAX - 1) out.push({ label, tokens })
   else {
     // bounded: late labels fold into "other"
     const other = out.find(x => x.label === 'other')
@@ -469,7 +469,7 @@ export function attributeTurn(s: Snapshot, t: { agentId?: string; model?: string
     const b = cur.breakdown ?? blankBreakdown()
     const agent = t.agentId ? s.agents.find(a => a.id === t.agentId) : undefined
     const agentLabel = !t.agentId ? 'main' : agent?.description || t.agentId.slice(0, 8)
-    const cubeLabel = agent?.cube ? `${agent.cube.id} ${agent.cube.kind}` : 'main'
+    const cubeLabel = agent?.cube ? `${agent.cube.id} ${agent.cube.kind}` : t.agentId ? 'unattributed' : 'main'
     return {
       ...s,
       usage: {
@@ -502,15 +502,13 @@ export function attributeTool(s: Snapshot, r: { tool: string; target: string; to
   }
 }
 
-/** Maps `$.session.usage({ breakdown: 'summary' })` to context slices; unknown shapes are ignored. */
+/** Maps `$.session.usage({ breakdown: 'summary' })`.context.breakdown.categories (kind 'used' only) to context slices; unknown shapes are ignored. */
 export function setContextBreakdown(s: Snapshot, m: any): Snapshot {
   try {
-    const raw = m?.breakdown ?? m?.context?.breakdown
-    const list: UsageSlice[] = Array.isArray(raw)
-      ? raw.map((x: any) => ({ label: String(x?.label ?? x?.name ?? x?.category ?? ''), tokens: Number(x?.tokens) }))
-      : raw && typeof raw === 'object'
-        ? Object.entries(raw).map(([label, v]: [string, any]) => ({ label, tokens: Number(typeof v === 'object' ? v?.tokens : v) }))
-        : []
+    const cats = m?.context?.breakdown?.categories
+    const list: UsageSlice[] = Array.isArray(cats)
+      ? cats.filter((x: any) => x?.kind === 'used').map((x: any) => ({ label: String(x?.name ?? ''), tokens: Number(x?.tokens) }))
+      : []
     const context = list.filter(x => x.label && Number.isFinite(x.tokens) && x.tokens > 0).slice(0, SLICES_MAX)
     if (context.length === 0) return s
     const cur = s.usage ?? blankUsage()
