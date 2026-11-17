@@ -10,7 +10,7 @@ export type FileResult = { ok: boolean; message: string; data?: Record<string, u
 export type FileDeps = {
   cwd: string
   isWindows: boolean
-  env: (name: string) => Promise<string | undefined>
+  env: { localAppData?: string; programFiles?: string; os?: string; neutralDir: string } // neutralDir: a directory never inside the project
   stat: (path: string) => Promise<{ kind: string; size: number; realPath?: string }>
   readBytes: (path: string) => Promise<string> // base64
   exists: (path: string) => Promise<boolean>
@@ -54,6 +54,7 @@ const inside = (child: string, root: string, ci: boolean) => {
 export async function resolveInCwd(d: FileDeps, input: unknown): Promise<{ abs: string; rel: string } | { error: string }> {
   if (typeof input !== 'string' || !input.trim() || input.length > 1024 || input.includes('\0')) return { error: 'path required' }
   const raw = slash(input.trim())
+  if (raw.replace(/^[A-Za-z]:/, '').includes(':')) return { error: 'path is outside the project' } // alternate data streams
   if (raw.startsWith('//') || /^[A-Za-z]:(?!\/)/.test(raw)) return { error: 'path is outside the project' }
   const ci = d.isWindows
   const cwd = fold(trimEnd(slash(d.cwd)))
@@ -139,8 +140,8 @@ export function editorArgv(editor: string, exe: string, abs: string, line?: numb
 export async function editorExecutables(d: FileDeps, editor: string): Promise<string[]> {
   if (editor === 'vscode') {
     if (!d.isWindows) return ['code']
-    const local = await d.env('LOCALAPPDATA')
-    const pf = (await d.env('ProgramFiles')) ?? 'C:\\Program Files'
+    const local = d.env.localAppData
+    const pf = d.env.programFiles ?? 'C:\\Program Files'
     const found: string[] = []
     for (const p of [local ? `${local}\\Programs\\Microsoft VS Code\\Code.exe` : '', `${pf}\\Microsoft VS Code\\Code.exe`]) {
       if (p && (await d.exists(p).catch(() => false))) found.push(p)
@@ -148,7 +149,7 @@ export async function editorExecutables(d: FileDeps, editor: string): Promise<st
     return [...found, 'code']
   }
   if (!d.isWindows) return ['studio.sh', 'studio']
-  const pf = (await d.env('ProgramFiles')) ?? 'C:\\Program Files'
+  const pf = d.env.programFiles ?? 'C:\\Program Files'
   const found: string[] = []
   for (const p of [`${pf}\\Android\\Android Studio\\bin\\studio64.exe`, 'C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe']) {
     if (!found.includes(p) && (await d.exists(p).catch(() => false))) found.push(p)
@@ -167,7 +168,8 @@ export async function fileOpen(d: FileDeps, input: unknown, editor: unknown, lin
   for (const exe of await editorExecutables(d, editor)) {
     const argv = editorArgv(editor, exe, abs, n)
     // The launcher may keep running with the editor; success is "started and did not fail fast".
-    const run = d.run(argv, { cwd: d.cwd, timeoutMs: 600000 }).then(
+    // cwd is never the project dir: bare names resolve against cwd first on Windows
+    const run = d.run(argv, { cwd: d.env.neutralDir, timeoutMs: 600000 }).then(
       x => (x.exitCode === 0 ? '' : x.stderr.trim() || `exit ${x.exitCode}`),
       e => (e instanceof Error ? e.message : String(e)),
     )
@@ -193,11 +195,18 @@ export async function runFileCommand(cmd: Record<string, unknown>, d: FileDeps):
 
 /** The real deps, from the engine's `$`. */
 export async function filesDeps($: any): Promise<FileDeps> {
+  // $.env.get needs a literal name, so every variable is read by its own call.
   const os = await $.env.get('OS')
+  const localAppData = await $.env.get('LOCALAPPDATA')
+  const programFiles = await $.env.get('ProgramFiles')
+  const temp = await $.env.get('TEMP')
+  const userProfile = await $.env.get('USERPROFILE')
+  const home = await $.env.get('HOME')
+  const isWindows = os === 'Windows_NT'
   return {
     cwd: await $.session.cwd(),
-    isWindows: os === 'Windows_NT',
-    env: (n: string) => $.env.get(n),
+    isWindows,
+    env: { localAppData, programFiles, os, neutralDir: temp || userProfile || home || (isWindows ? 'C:\\Windows' : '/') },
     stat: (p: string) => $.fs.stat(p, { resolve: true }),
     readBytes: async (p: string) => (await $.fs.read(p, { as: 'bytes' })).base64,
     exists: (p: string) => $.fs.exists(p),

@@ -7,10 +7,12 @@ const b64 = (s: string) => btoa(s)
 
 function deps(over: Partial<FileDeps> = {}, files: Record<string, string> = {}, links: Record<string, string> = {}): any {
   const calls: string[][] = []
+  const cwds: (string | undefined)[] = []
   return {
     cwd: 'C:\\proj\\app',
     isWindows: true,
-    env: async (n: string) => (n === 'LOCALAPPDATA' ? 'C:\\Users\\u\\AppData\\Local' : undefined),
+    env: { localAppData: 'C:\\Users\\u\\AppData\\Local', neutralDir: 'C:\\Users\\u' },
+    cwds,
     stat: async (p: string) => {
       if (p === 'C:/proj/app') return { kind: 'dir', size: 0, realPath: 'C:\\proj\\app' }
       if (p in files) return { kind: 'file', size: files[p].length, realPath: (links[p] ?? p).replace(/\//g, '\\') }
@@ -18,8 +20,9 @@ function deps(over: Partial<FileDeps> = {}, files: Record<string, string> = {}, 
     },
     readBytes: async (p: string) => b64(files[p]),
     exists: async () => false,
-    run: async (argv: string[]) => {
+    run: async (argv: string[], init?: any) => {
       calls.push(argv)
+      cwds.push(init?.cwd)
       return { exitCode: 0, stdout: '', stderr: '' }
     },
     sleep: async () => {},
@@ -31,7 +34,7 @@ function deps(over: Partial<FileDeps> = {}, files: Record<string, string> = {}, 
 test('paths outside the working directory are refused', async () => {
   const f = { 'C:/proj/app/a.txt': 'hi', 'C:/proj/other/x.txt': 'no', 'C:/proj/appx/y.txt': 'no' }
   const d = deps({}, f)
-  for (const bad of ['../other/x.txt', '..\\other\\x.txt', 'sub/../../other/x.txt', 'C:\\proj\\other\\x.txt', 'C:/proj/other/x.txt', 'C:/proj/appx/y.txt', '/etc/passwd', '\\\\server\\share\\f', 'D:file', '', '  ', 'a\u0000b']) {
+  for (const bad of ['../other/x.txt', '..\\other\\x.txt', 'sub/../../other/x.txt', 'C:\\proj\\other\\x.txt', 'C:/proj/other/x.txt', 'C:/proj/appx/y.txt', '/etc/passwd', '\\\\server\\share\\f', 'D:file', 'a.txt:stream', 'C:/proj/app/a.txt:x:$DATA', '', '  ', 'a\u0000b']) {
     const r: any = await resolveInCwd(d, bad)
     expect(r.error).toBeTruthy()
   }
@@ -100,4 +103,11 @@ test('file.open validates, confines, and spawns the editor', async () => {
   const s = deps({ exists: async (p: string) => p.endsWith('studio64.exe') }, { 'C:/proj/app/a.ts': 'x' })
   expect((await fileOpen(s, 'a.ts', 'studio', 9)).ok).toBe(true)
   expect(s.calls[0]).toEqual(['C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe', '--line', '9', 'C:\\proj\\app\\a.ts'])
+})
+
+test('editors launch from a neutral directory, never the project', async () => {
+  const d = deps({}, { 'C:/proj/app/a.ts': 'x' })
+  await fileOpen(d, 'a.ts', 'vscode', 3)
+  expect(d.cwds[0]).toBe('C:\\Users\\u')
+  expect(d.cwds.includes('C:\\proj\\app')).toBe(false)
 })
