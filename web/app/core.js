@@ -5,15 +5,10 @@
 // Screens send commands ONLY through TP.send(type, payload); they never fetch directly.
 var TP = window.TP = { screens: {}, state: null, token: '', current: '', events: [], demoMode: /[?&]demo=1/.test(location.search) };
 
-TP.SCREENS = ['session', 'board', 'cubes', 'review', 'files', 'usage'];
+TP.SCREENS = ['cubes', 'usage'];
 TP.ICONS = {
-  chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
-  board: '<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="13" rx="1.5"/>',
   cube: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
-  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5L16 9.5"/>',
-  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-6"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'
 };
 
@@ -91,7 +86,7 @@ TP.send = function (type, payload) {
 // ---- routing ----
 TP.route = function () {
   var name = (location.hash || '').replace(/^#\/?/, '').split('/')[0];
-  if (TP.SCREENS.indexOf(name) < 0) name = 'session';
+  if (TP.SCREENS.indexOf(name) < 0) name = 'cubes';
   TP.current = name;
   TP.SCREENS.forEach(function (s) {
     var sec = TP.$('screen-' + s);
@@ -177,16 +172,6 @@ TP.connect = function () {
   es.addEventListener('snapshot', function (m) {
     try { TP.onState(JSON.parse(m.data)); } catch (e) { console.error('snapshot', e); }
   });
-  es.onmessage = function (m) {
-    var ev;
-    try { ev = JSON.parse(m.data); } catch (e) { return; }
-    if (typeof ev.seq === 'number') {
-      if (ev.seq < TP.lastSeq) TP.events.length = 0; // server restarted: seq began again, drop the stale replay buffer
-      TP.lastSeq = ev.seq;
-    }
-    // EventSource resends lastSeq as Last-Event-ID
-    TP.emit(ev);
-  };
   es.onerror = function () {
     // CLOSED = the browser gave up (HTTP error such as 401/404): use polling instead.
     if (es.readyState === 2) {
@@ -204,14 +189,12 @@ TP.closeAll = function () {
   document.querySelectorAll('.modal.on,.drawer.on,.pal.on,.pop.on,.scrim.on').forEach(function (e) { e.classList.remove('on'); });
 };
 TP.openPalette = function () { TP.toast('Search is coming soon'); };      // placeholder
-TP.newTicket = function () { TP.toast('New ticket is coming soon'); };    // placeholder
 
 TP.keys = function (e) {
   var tag = (e.target && e.target.tagName || '').toLowerCase();
   var typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable);
   if (e.key === 'Escape') { TP.closeAll(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); TP.openPalette(); return; }
-  if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'n') { e.preventDefault(); TP.newTicket(); }
 };
 
 TP.boot = function () {
@@ -224,8 +207,6 @@ TP.boot = function () {
     b.addEventListener('click', function () {
       var a = b.getAttribute('data-act');
       if (a === 'palette') TP.openPalette();
-      else if (a === 'newTicket') TP.newTicket();
-      else if (a === 'stop') TP.send('session.stop');
     });
   });
   TP.$('scrim').addEventListener('click', TP.closeAll);

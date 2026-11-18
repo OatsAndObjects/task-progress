@@ -40,7 +40,6 @@ h1,h2,h3,h4,p{margin:0}
 .navb:hover{background:var(--surface-2);color:var(--text)}
 .navb.on{background:var(--accent-soft);color:var(--text)}
 .navb.on svg{color:var(--shimmer)}
-.navb .dotc{position:absolute;margin-left:22px;margin-top:-4px;min-width:18px;height:18px;border-radius:9px;background:var(--warn);color:#1a1200;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 5px}
 .main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .top{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg-1) 80%,transparent);backdrop-filter:blur(10px);flex-wrap:wrap}
 .sess{min-width:0;flex:1 1 220px}
@@ -147,8 +146,7 @@ textarea.field{width:100%;resize:vertical}
   .main{order:1} .rail{order:2;flex-direction:row;padding:6px;border-right:0;border-top:1px solid var(--line);justify-content:space-around;gap:0}
   .logo{display:none}
   .navb{flex:1;padding:8px 2px;font-size:11px;border-radius:12px} .navb svg{width:20px;height:20px}
-  .navb .dotc{margin-left:14px}
-  .screen{padding:var(--s3)}
+    .screen{padding:var(--s3)}
   .top{padding:var(--s2) var(--s3);gap:var(--s2)}
   .sess span,.hidem{display:none}
   .two{grid-template-columns:1fr}

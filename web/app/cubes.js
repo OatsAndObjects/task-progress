@@ -24,6 +24,14 @@
     '#screen-cubes .fn code,.cdrawer .fn code{font:12.5px var(--mono);word-break:break-all}',
     '#screen-cubes .fn code b,.cdrawer .fn code b{color:var(--fc);font-weight:600}',
     '#screen-cubes .fn .d,.cdrawer .fn .d{font-size:13px;color:var(--muted)}',
+    '#screen-cubes .cube .act{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}#screen-cubes .cube.open .act{display:none}',
+    '#screen-cubes .tog{flex:none;width:28px;height:28px;border-radius:50%;border:1px solid var(--line-2);background:var(--surface-2);color:var(--muted);font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:transform .2s,background .15s,border-color .15s,color .15s}',
+    '#screen-cubes .tog:hover{background:var(--surface-3);border-color:var(--star);color:var(--text)}#screen-cubes .cube.open .tog{transform:rotate(90deg)}',
+    '#screen-cubes .desc{display:grid;grid-template-rows:0fr;transition:grid-template-rows .2s ease;margin-top:calc(var(--s3) * -1)}#screen-cubes .cube.open .desc{grid-template-rows:1fr;margin-top:0}',
+    '#screen-cubes .descin{overflow:hidden;min-height:0;display:flex;flex-direction:column;gap:var(--s3)}',
+    '#screen-cubes .dsec b{display:block;font-size:12px;color:var(--faint);margin-bottom:2px}#screen-cubes .dsec p{font-size:13.5px;color:var(--muted);overflow-wrap:anywhere}',
+    '#screen-cubes .rsum{font-size:13.5px;color:var(--muted);overflow-wrap:anywhere}',
+    '@media (prefers-reduced-motion:reduce){#screen-cubes .desc,#screen-cubes .tog{transition:none}}',
     '#screen-cubes .more{border:0;background:transparent;color:var(--shimmer);font-weight:600;font-size:13px;padding:6px 0;text-align:left}',
     '#screen-cubes .life,.cdrawer .life{display:flex;gap:4px;align-items:center}',
     '#screen-cubes .life i,.cdrawer .life i{flex:1;height:4px;border-radius:2px;background:var(--surface-3)}',
@@ -59,7 +67,11 @@
   var LIFE = { proposed: 0, rejected: 0, failed: 0, skipped: 0, revising: 0, approved: 1, queued: 1, running: 2, reviewing: 3, done: 5 };
   var PAL = ['#7DD3FC', '#A5B4FC', '#5EEAB4', '#F59E0B', '#F472B6', '#FB923C', '#C4B5FD', '#86EFAC'];
   var colors = {};
-  var openId = null, confirming = {}, drawer = null, askText = '', cubesById = {}, qaMap = {};
+  function loadOpen() {
+    try { var o = JSON.parse(localStorage.getItem('tp.cubes.open') || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; }
+  }
+  function saveOpen() { try { localStorage.setItem('tp.cubes.open', JSON.stringify(openCards)); } catch (e) {} }
+  var openCards = loadOpen(), openId = null, confirming = {}, drawer = null, askText = '', cubesById = {}, qaMap = {};
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function arr(x) { return Array.isArray(x) ? x : []; }
@@ -67,6 +79,14 @@
     f = String(f || '');
     if (!colors[f]) { var n = 0; for (var i = 0; i < f.length; i++) n = (n * 31 + f.charCodeAt(i)) >>> 0; colors[f] = PAL[n % PAL.length]; }
     return colors[f];
+  }
+  var lastList = [];
+  // The chip text: a queued cube names the cubes it still waits for.
+  function chipText(c) {
+    var st = status(c);
+    if (st !== 'queued') return SLAB[st];
+    var w = arr(c.after).filter(function (a) { var d = lastList.filter(function (x) { return x.id === a; })[0]; return d && d.status !== 'done'; });
+    return w.length ? 'Approved · starts after ' + w.join(', ') : SLAB[st];
   }
   function status(c) { return SLAB[c.status] ? c.status : 'proposed'; }
 
@@ -157,11 +177,15 @@
     else if (st === 'reviewing') prim = '<button class="btn pri" data-cact="open" data-id="' + id + '">Read PR review</button>';
     else prim = '<button class="btn pri" data-cact="open" data-id="' + id + '">Open details</button>';
     var cls = st === 'reviewing' && c.review && /REQUEST/.test(verdictLabel(c.review.verdict)) ? 'changes' : st;
-    return '<article class="cube ' + cls + '" id="cube-' + id + '"><div class="h"><span class="cid">' + id + '</span><span class="chip ' + SCHIP[st] + '">' + SLAB[st] + '</span><span class="sp"></span>' +
-      (c.minutes ? '<span class="faint" style="font-size:13px">' + esc(c.minutes) + ' min</span>' : '') + '</div>' +
+    var isOpen = !!openCards[c.id];
+    return '<article class="cube ' + cls + (isOpen ? ' open' : '') + '" id="cube-' + id + '"><div class="h"><span class="cid">' + id + '</span><span class="chip ' + SCHIP[st] + '">' + esc(chipText(c)) + '</span><span class="sp"></span>' +
+      (c.minutes ? '<span class="faint" style="font-size:13px">' + esc(c.minutes) + ' min</span>' : '') +
+      '<button class="tog" data-cact="toggle" data-id="' + id + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' description">&#9656;</button></div>' +
       '<h4>' + esc(c.title) + '</h4>' + (c.action ? '<p class="act">' + esc(c.action) + '</p>' : '') +
+      '<div class="desc"><div class="descin"><div class="dsec"><b>Description</b><p>' + esc(c.details || c.action || c.title) + '</p></div>' +
       (c.doneWhen ? '<div class="dw"><b>Done when</b>' + esc(c.doneWhen) + '</div>' : '') +
-      renderFlow(c, false) + revBadge(c) + lifeHtml(c) +
+      renderFlow(c, true) + revBadge(c) + (c.review && c.review.summary ? '<p class="rsum">' + esc(c.review.summary) + '</p>' : '') + '</div></div>' +
+      lifeHtml(c) +
       '<div class="cact">' + prim + '<button class="btn" data-cact="ask" data-id="' + id + '">Ask</button></div></article>';
   }
 
@@ -192,7 +216,7 @@
   function renderCubes(state) {
     ensureCss();
     var root = TP.$('screen-cubes'); if (!root) return;
-    var list = cubeList(state);
+    var list = cubeList(state); lastList = list;
     cubesById = {}; list.forEach(function (c) { cubesById[c.id] = c; });
     root._list = list;
     var cs = state && state.cubes, task = cs && !Array.isArray(cs) && cs.task;
@@ -239,7 +263,7 @@
     var ctx = {}; // style var on drawer root for bc
     var bc = { proposed: 'var(--faint)', rejected: 'var(--faint)', approved: 'var(--star)', queued: 'var(--star)', running: 'var(--cur)', reviewing: 'var(--warn)', done: 'var(--ok)' }[st];
     var h = '<div style="--bc:' + bc + '"><button class="btn ghost sm x" data-cact="close" aria-label="Close">Close</button>' +
-      '<div class="hd"><span class="cid">' + id + '</span><span class="chip ' + SCHIP[st] + '">' + SLAB[st] + '</span>' +
+      '<div class="hd"><span class="cid">' + id + '</span><span class="chip ' + SCHIP[st] + '">' + esc(chipText(c)) + '</span>' +
       (c.minutes ? '<span class="faint">' + esc(c.minutes) + ' min</span>' : '') + '</div><h2>' + esc(c.title) + '</h2>';
     if (c.action) h += '<p class="muted">' + esc(c.action) + '</p>';
     var acts = '';
@@ -319,6 +343,18 @@
   function onClick(e) {
     var b = e.target.closest('[data-cact]'); if (!b) return;
     var a = b.getAttribute('data-cact'), id = b.getAttribute('data-id');
+    if (a === 'toggle') {
+      var card = b.closest('.cube'); if (!card) return;
+      var on = !card.classList.contains('open');
+      card.classList.toggle('open', on);
+      b.setAttribute('aria-expanded', String(on)); b.setAttribute('aria-label', (on ? 'Hide' : 'Show') + ' description');
+      if (on) openCards[id] = 1; else delete openCards[id];
+      saveOpen();
+      var root = TP.$('screen-cubes'), done = false, fin = function () { if (done) return; done = true; if (root) drawDeps(root); };
+      var dsc = card.querySelector('.desc'); if (dsc) dsc.addEventListener('transitionend', fin, { once: true });
+      setTimeout(fin, 260);
+      return;
+    }
     if (a === 'open') return openCube(id);
     if (a === 'ask') return openCube(id, true);
     if (a === 'close') { TP.closeAll(); return; }

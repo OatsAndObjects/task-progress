@@ -178,6 +178,8 @@
       var bh = root.querySelector('#usage-breakdown');
       if (bh && !bh._wired) { bh._wired = true; bh.addEventListener('click', function (e) { var b = e.target.closest && e.target.closest('[data-tab]'); if (!b) return; tab = b.getAttribute('data-tab'); TP.screens.usage.render(lastState); }); }
       var bo = '<div class="card">' + renderBreakdown(u && u.breakdown) + renderTopTools(u && u.topTools) + '</div>';
+      var cm = state && state.lastContextMap;
+      if (cm && cm.text != null) bo += '<div class="card" style="margin-top:var(--s4)"><h3>Context map at finish</h3><p class="muted">' + esc(cm.at && !isNaN(new Date(cm.at)) ? new Date(cm.at).toLocaleString() : '') + (cm.file ? ' · saved to ' + esc(cm.file) : '') + '</p><pre style="white-space:pre-wrap;overflow:auto;max-height:420px;font:13px var(--mono);margin-top:var(--s2)">' + esc(cm.text) + '</pre></div>';
       if (bh && (bo !== lastBd || !bh.firstChild)) { lastBd = bo; bh.innerHTML = bo; }
     }
   };

@@ -71,49 +71,6 @@ export type SnapshotAgent = {
   /** From the dispatch tag: the cube this agent builds or reviews. */
   cube?: { id: string; kind: 'build' | 'review' }
 }
-export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped'
-export type SnapshotShell = {
-  id: string
-  command: string
-  description: string
-  status: ShellStatus
-  startedAt: number
-  endedAt?: number
-  exitCode?: number
-}
-export type SnapshotFile = { path: string; op: 'edit' | 'write'; count: number; lastAt: number }
-export type SnapshotToolEntry = { at: number; tool: string; summary: string; agentId?: string; ok: boolean }
-export type UserTaskStatus = 'todo' | 'doing' | 'blocked' | 'done'
-export type UserTaskPriority = 'low' | 'med' | 'high'
-export type UserTask = {
-  id: string
-  title: string
-  notes: string
-  status: UserTaskStatus
-  priority: UserTaskPriority
-  createdAt: number
-  updatedAt: number
-  source: 'user' | 'plan'
-}
-export type TicketStatus = 'todo' | 'doing' | 'review' | 'blocked' | 'done'
-export type TicketType = 'feature' | 'bug' | 'task'
-export type TicketPriority = 'low' | 'med' | 'high'
-/** A Jira-style ticket on the web Board. */
-export type Ticket = {
-  key: string
-  type: TicketType
-  priority: TicketPriority
-  title: string
-  description: string
-  checks: { text: string; done: boolean }[]
-  assignee: string
-  status: TicketStatus
-  activity: { who: 'you' | 'claude'; text: string; at: number }[]
-  createdAt: number
-  updatedAt: number
-  /** Id of the old task this ticket was migrated from. */
-  legacyId?: string
-}
 /** One function-level step of a cube. Boards stored before 0.10 hold strings, normalized to `{file:'',fn:'',does}`. */
 export type FlowStep = {
   /** Repo-relative path, or "shell" / "browser" / "terminal" for non-code steps. */
@@ -201,18 +158,13 @@ export type Snapshot = {
   progress: { task: string; step: number; totalSteps: number; label: string; done: boolean } | null
   plan: { task: string; steps: SnapshotPlanStep[] } | null
   agents: SnapshotAgent[]
-  shells: SnapshotShell[]
-  files: SnapshotFile[]
-  /** Newest last, at most 200. */
-  toolLog: SnapshotToolEntry[]
-  tasks: UserTask[]
-  tickets: Ticket[]
-  columns: TicketStatus[]
   /** The approval cube board of the current task, if it was planned in cubes. */
   cubes: CubeBoard | null
   usage: SnapshotUsage | null
+  /** The /context output saved when the last cube of a plan finished (then /clear ran). */
+  lastContextMap?: { at: number; text: string; file: string }
 }
-/** A dashboard command, from the pane or the web bridge: `{ action, ...args }`. */
+/** A dashboard command, from the web bridge: `{ action, ...args }`. */
 export type DashboardCommand = { action: string; [arg: string]: unknown }
 export type DashboardCommandResult = { ok: boolean; message: string; data?: Record<string, unknown> }
 /** The running web bridge, if any. */

@@ -1,5 +1,5 @@
 'use strict';
-// Static routes: v2 at /, v1 at /v1, traversal refused, API still token-gated.
+// Static routes: the app at /, /v2 redirects, traversal refused, API still token-gated.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
@@ -61,23 +61,18 @@ test('v2 root assets are served with right types', async () => {
   }
 });
 
-test('/v2/ still works and /v2 redirects', async () => {
-  const r = await raw('/v2/');
-  assert.equal(r.status, 200);
-  assert.match(r.body, /<script src="core\.js">/);
+test('/v2 and /v2/ redirect to / keeping the query', async () => {
+  for (const p of ['/v2', '/v2/']) {
+    const r = await raw(p + '?demo=1');
+    assert.equal(r.status, 302, p);
+    assert.equal(r.headers.location, '/?demo=1');
+  }
   assert.equal((await raw('/v2/core.js')).status, 200);
-  assert.equal((await raw('/v2')).status, 302);
 });
 
-test('/v1 and /v1/ serve the v1 page (self-contained, no relative assets)', async () => {
-  for (const p of ['/v1', '/v1/']) {
-    const r = await raw(p);
-    assert.equal(r.status, 200, p);
-    assert.match(r.headers['content-type'], /text\/html/);
-    assert.notEqual(r.body, (await raw('/')).body);
-    assert.doesNotMatch(r.body, /<script[^>]+src="(?!https?:)/);
-    assert.doesNotMatch(r.body, /<link[^>]+href="(?!https?:)/);
-  }
+test('/v1 is gone', async () => {
+  assert.equal((await raw('/v1')).status, 404);
+  assert.equal((await raw('/v1/')).status, 404);
 });
 
 test('path traversal and non-allowlisted files are refused', async () => {
@@ -105,7 +100,7 @@ test('path traversal and non-allowlisted files are refused', async () => {
 });
 
 test('API routes still require the token', async () => {
-  for (const p of ['/api/snapshot', '/api/stream', '/api/events']) {
+  for (const p of ['/api/snapshot', '/api/stream']) {
     const r = await raw(p);
     assert.ok(r.status === 401 || r.status === 403 || r.status === 404 || r.status === 405, `${p} -> ${r.status}`);
   }

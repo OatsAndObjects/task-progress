@@ -38,7 +38,6 @@ const TOKEN = args.token;
 const MAX_BODY = 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 10000;
 const HEARTBEAT_MS = 15000;
-const INDEX_PATH = path.join(__dirname, 'index.html');
 const APP_DIR = path.resolve(__dirname, 'app');
 const APP_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -73,7 +72,6 @@ const TOKEN_BUF = Buffer.from(TOKEN, 'utf8');
 
 // ---------- state ----------
 let latestSnapshot = null; // JSON string
-const sseClients = new Set();
 const pending = new Map(); // id -> { res, timer }
 let boundPort = 0;
 
@@ -164,9 +162,6 @@ const PRIORITY = ['low', 'med', 'high'];
 const isId = (v) => typeof v === 'string' && v.length > 0 && v.length <= 200;
 const isStr = (v, max) => typeof v === 'string' && v.length <= max;
 const isText = (v, max) => isStr(v, max) && v.trim().length > 0;
-const TICKET_TYPE = ['feature', 'bug', 'task'];
-const TICKET_STATUS = ['todo', 'doing', 'review', 'blocked', 'done'];
-const isTicketKey = (v) => typeof v === 'string' && (/^TP-\d{1,6}$/.test(v) || /^[A-Za-z0-9_.:-]{1,64}$/.test(v));
 
 // Cube board fields. Strings are trimmed; arrays hold strings only.
 const isCubeId = (v) => typeof v === 'string' && v.trim().length > 0 && v.trim().length <= 40;
@@ -221,146 +216,8 @@ const CUBE_CHECK = {
 const CUBE_FIELDS = Object.keys(CUBE_CHECK);
 
 // COMMANDS: the ONE allowlist for POST /api/command. Each validator returns { args } with only
-// whitelisted keys, or { error }. Later cubes add 'session.prompt', 'session.stop', 'perm.answer',
-// 'ticket.*' and 'file.*' here (one entry each, same validator style). Nothing outside this table runs.
+// whitelisted keys, or { error }. Nothing outside this table runs.
 const COMMANDS = {
-  'agent.stop': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
-  'shell.stop': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
-  'step.set': (a) => {
-    const kOk = (Number.isInteger(a.k) && a.k >= 0) || isId(a.k);
-    if (!kOk) return { error: 'k required' };
-    if (!STEP_STATUS.includes(a.status)) return { error: 'status must be one of ' + STEP_STATUS.join(', ') };
-    return { args: { k: a.k, status: a.status } };
-  },
-  'items.clearFinished': () => ({ args: {} }),
-  'task.add': (a) => {
-    if (!isText(a.title, 500)) return { error: 'title required (max 500 chars)' };
-    const out = { title: a.title.trim() };
-    if (a.notes !== undefined && a.notes !== null && a.notes !== '') {
-      if (!isStr(a.notes, 10000)) return { error: 'notes must be text (max 10000 chars)' };
-      out.notes = a.notes;
-    }
-    if (a.priority !== undefined && a.priority !== null) {
-      if (!PRIORITY.includes(a.priority)) return { error: 'priority must be one of ' + PRIORITY.join(', ') };
-      out.priority = a.priority;
-    }
-    return { args: out };
-  },
-  'task.update': (a) => {
-    if (!isId(a.id)) return { error: 'id required' };
-    const allowed = ['title', 'notes', 'status', 'priority'];
-    const unknown = Object.keys(a).filter((k) => k !== 'id' && !allowed.includes(k));
-    if (unknown.length) return { error: 'unknown field(s): ' + unknown.join(', ') };
-    const out = { id: a.id };
-    if (a.title !== undefined) {
-      if (!isText(a.title, 500)) return { error: 'title must be non-empty (max 500 chars)' };
-      out.title = a.title.trim();
-    }
-    if (a.notes !== undefined) {
-      if (!isStr(a.notes, 10000)) return { error: 'notes must be text (max 10000 chars)' };
-      out.notes = a.notes;
-    }
-    if (a.status !== undefined) {
-      if (!TASK_STATUS.includes(a.status)) return { error: 'status must be one of ' + TASK_STATUS.join(', ') };
-      out.status = a.status;
-    }
-    if (a.priority !== undefined) {
-      if (!PRIORITY.includes(a.priority)) return { error: 'priority must be one of ' + PRIORITY.join(', ') };
-      out.priority = a.priority;
-    }
-    if (Object.keys(out).length === 1) return { error: 'nothing to update' };
-    return { args: out };
-  },
-  'task.delete': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
-  'task.send': (a) => (isId(a.id) ? { args: { id: a.id } } : { error: 'id required' }),
-  // ---- tickets (Board screen); key is TP-n or a legacy task id ----
-  'ticket.create': (a) => {
-    if (!isText(a.title, 200)) return { error: 'title required (max 200 chars)' };
-    if (!TICKET_TYPE.includes(a.type)) return { error: 'type must be one of ' + TICKET_TYPE.join(', ') };
-    if (!PRIORITY.includes(a.priority)) return { error: 'priority must be one of ' + PRIORITY.join(', ') };
-    const out = { type: a.type, priority: a.priority, title: a.title.trim() };
-    if (a.description !== undefined && a.description !== null) {
-      if (!isStr(a.description, 10000)) return { error: 'description must be text (max 10000 chars)' };
-      out.description = a.description;
-    }
-    if (a.checks !== undefined && a.checks !== null) {
-      if (!Array.isArray(a.checks) || a.checks.length > 50 || !a.checks.every((x) => isStr(x, 300))) return { error: 'checks must be up to 50 texts (max 300 chars each)' };
-      out.checks = a.checks;
-    }
-    if (a.assignee !== undefined && a.assignee !== null && a.assignee !== '') {
-      if (!isText(a.assignee, 60)) return { error: 'assignee must be text (max 60 chars)' };
-      out.assignee = a.assignee.trim();
-    }
-    return { args: out };
-  },
-  'ticket.move': (a) => {
-    if (!isTicketKey(a.key)) return { error: 'key required' };
-    if (!TICKET_STATUS.includes(a.status)) return { error: 'status must be one of ' + TICKET_STATUS.join(', ') };
-    return { args: { key: a.key, status: a.status } };
-  },
-  'ticket.check': (a) => {
-    if (!isTicketKey(a.key)) return { error: 'key required' };
-    if (!Number.isInteger(a.index) || a.index < 0 || a.index >= 50) return { error: 'index must be 0 to 49' };
-    if (typeof a.done !== 'boolean') return { error: 'done must be true or false' };
-    return { args: { key: a.key, index: a.index, done: a.done } };
-  },
-  'ticket.comment': (a) => {
-    if (!isTicketKey(a.key)) return { error: 'key required' };
-    return isText(a.text, 4000) ? { args: { key: a.key, text: a.text } } : { error: 'text required (max 4000 chars)' };
-  },
-  'ticket.assign': (a) => {
-    if (!isTicketKey(a.key)) return { error: 'key required' };
-    if (a.assignee === undefined || a.assignee === null || a.assignee === '') return { args: { key: a.key, assignee: '' } };
-    return isText(a.assignee, 60) ? { args: { key: a.key, assignee: a.assignee.trim() } } : { error: 'assignee must be text (max 60 chars)' };
-  },
-  'ticket.update': (a) => {
-    if (!isTicketKey(a.key)) return { error: 'key required' };
-    const out = { key: a.key };
-    if (a.title !== undefined) {
-      if (!isText(a.title, 200)) return { error: 'title must be non-empty (max 200 chars)' };
-      out.title = a.title.trim();
-    }
-    if (a.description !== undefined) {
-      if (!isStr(a.description, 10000)) return { error: 'description must be text (max 10000 chars)' };
-      out.description = a.description;
-    }
-    if (a.type !== undefined) {
-      if (!TICKET_TYPE.includes(a.type)) return { error: 'type must be one of ' + TICKET_TYPE.join(', ') };
-      out.type = a.type;
-    }
-    if (a.priority !== undefined) {
-      if (!PRIORITY.includes(a.priority)) return { error: 'priority must be one of ' + PRIORITY.join(', ') };
-      out.priority = a.priority;
-    }
-    return Object.keys(out).length === 1 ? { error: 'nothing to update' } : { args: out };
-  },
-  'ticket.delete': (a) => (isTicketKey(a.key) ? { args: { key: a.key } } : { error: 'key required' }),
-  'prompt.send': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
-  'orchestrate.set': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
-
-  // ---- session: a prompt typed on the web, and Stop for the running turn ----
-  'session.prompt': (a) => (isText(a.text, 20000) ? { args: { text: a.text } } : { error: 'text required (max 20000 chars)' }),
-  'session.stop': () => ({ args: {} }),
-  'perm.answer': (a) => {
-    if (typeof a.id !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(a.id)) return { error: 'id required (max 64 safe chars)' };
-    if (!['allow', 'allowAlways', 'deny'].includes(a.decision)) return { error: 'decision must be allow, allowAlways or deny' };
-    return { args: { id: a.id, decision: a.decision } };
-  },
-
-  // ---- files (read / diff / open in an editor); the mod confines paths to the session cwd ----
-  'file.read': (a) => (isText(a.path, 1024) ? { args: { path: a.path } } : { error: 'path required (max 1024 chars)' }),
-  'file.diff': (a) => (isText(a.path, 1024) ? { args: { path: a.path } } : { error: 'path required (max 1024 chars)' }),
-  'file.open': (a) => {
-    if (!isText(a.path, 1024)) return { error: 'path required (max 1024 chars)' };
-    if (a.editor !== 'vscode' && a.editor !== 'studio') return { error: 'editor must be vscode or studio' };
-    const out = { path: a.path, editor: a.editor };
-    if (a.line !== undefined && a.line !== null && a.line !== '') {
-      if (!Number.isInteger(a.line) || a.line < 1 || a.line > 10000000) return { error: 'line must be a positive whole number' };
-      out.line = a.line;
-    }
-    return { args: out };
-  },
-
   // ---- cube flow board ----
   'cube.approve': (a) => (isCubeId(a.id) ? { args: { id: a.id.trim() } } : { error: 'id required (max 40 chars)' }),
   'cube.approveAll': () => ({ args: {} }),
@@ -432,19 +289,9 @@ const COMMANDS = {
   'cubes.gate': (a) => (typeof a.on === 'boolean' ? { args: { on: a.on } } : { error: 'on must be true or false' }),
 };
 
-// ---------- live event stream (v2) ----------
-// Ring buffer of the last EVENT_MAX events; seq is monotonically increasing and never reused.
-const EVENT_MAX = 2000;
-const EVENT_BATCH_MAX = 500;
-const events = [];
-let nextSeq = 1;
+// ---------- live stream ----------
+const CLIENT_BACKLOG_MAX = 2 * 1024 * 1024; // a stream client this far behind is dropped (EventSource reconnects)
 const streamClients = new Set();
-
-const EVENT_MAX_BYTES = 64 * 1024; // one event
-const RING_MAX_BYTES = 32 * 1024 * 1024; // whole ring
-const CLIENT_BACKLOG_MAX = 2 * 1024 * 1024; // a stream client this far behind is dropped (EventSource replays)
-const eventSizes = []; // bytes per ring entry, parallel to `events`
-let ringBytes = 0;
 
 function writeTo(set, res, frame) {
   try {
@@ -458,40 +305,10 @@ function writeTo(set, res, frame) {
   }
 }
 
-function eventFrame(ev) {
-  return `id: ${ev.seq}\ndata: ${JSON.stringify(ev)}\n\n`;
-}
-
-function addEvents(list) {
-  const added = [];
-  for (const raw of list) {
-    const ev = { ...raw, seq: nextSeq++ };
-    if (typeof ev.ts !== 'number') ev.ts = Date.now();
-    const size = Buffer.byteLength(JSON.stringify(ev));
-    events.push(ev);
-    eventSizes.push(size);
-    ringBytes += size;
-    added.push(ev);
-  }
-  let drop = events.length > EVENT_MAX ? events.length - EVENT_MAX : 0;
-  let bytes = ringBytes;
-  for (let i = 0; i < drop; i++) bytes -= eventSizes[i];
-  while (bytes > RING_MAX_BYTES && drop < events.length - 1) bytes -= eventSizes[drop++];
-  if (drop > 0) {
-    events.splice(0, drop);
-    for (const n of eventSizes.splice(0, drop)) ringBytes -= n;
-  }
-  for (const res of [...streamClients]) for (const ev of added) if (streamClients.has(res)) writeTo(streamClients, res, eventFrame(ev));
-  return added;
-}
-
 // ---------- SSE ----------
 function broadcastSnapshot() {
   const frame = `event: snapshot\ndata: ${latestSnapshot}\n\n`;
   for (const res of streamClients) writeTo(streamClients, res, frame);
-  for (const res of sseClients) {
-    writeTo(sseClients, res, frame);
-  }
 }
 
 const heartbeat = setInterval(() => {
@@ -502,33 +319,8 @@ const heartbeat = setInterval(() => {
 }, HEARTBEAT_MS);
 heartbeat.unref();
 
-// POST /api/events: body is one event object or an array of them. Token already checked.
-async function handleEvents(req, res) {
-  let body;
-  try {
-    body = await readBody(req);
-  } catch (e) {
-    return sendJson(res, e.status || 400, { ok: false, message: e.message });
-  }
-  const list = Array.isArray(body) ? body : [body];
-  if (!list.length || list.length > EVENT_BATCH_MAX) {
-    return sendJson(res, 400, { ok: false, message: `send 1-${EVENT_BATCH_MAX} events` });
-  }
-  if (!list.every((e) => e && typeof e === 'object' && !Array.isArray(e))) {
-    return sendJson(res, 400, { ok: false, message: 'each event must be a JSON object' });
-  }
-  const fit = list.filter((e) => Buffer.byteLength(JSON.stringify(e)) <= EVENT_MAX_BYTES);
-  const dropped = list.length - fit.length;
-  if (!fit.length) return sendJson(res, 400, { ok: false, message: `event too large (max ${EVENT_MAX_BYTES} bytes)`, dropped });
-  const added = addEvents(fit);
-  return sendJson(res, 200, { ok: true, seq: added[added.length - 1].seq, dropped });
-}
-
-// GET /api/stream?t=<token>[&since=<seq>]: Server-Sent Events. Token already checked (query param allowed).
-function handleStream(req, res, url) {
-  const sinceRaw = req.headers['last-event-id'] || url.searchParams.get('since') || '';
-  let since = /^\d+$/.test(String(sinceRaw)) ? parseInt(sinceRaw, 10) : 0;
-  if (since >= nextSeq) since = 0; // client saw a previous server run (seq restarted): replay everything
+// GET /api/stream?t=<token>: Server-Sent Events. Token already checked (query param allowed).
+function handleStream(req, res) {
   res.writeHead(200, {
     ...BASE_HEADERS,
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -538,7 +330,6 @@ function handleStream(req, res, url) {
   });
   res.write('retry: 3000\n\n');
   if (latestSnapshot) res.write(`event: snapshot\ndata: ${latestSnapshot}\n\n`);
-  for (const ev of events) if (ev.seq > since) res.write(eventFrame(ev));
   streamClients.add(res);
   res.on('error', () => streamClients.delete(res));
   req.on('close', () => streamClients.delete(res));
@@ -552,30 +343,12 @@ async function handle(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${boundPort}`);
   const p = url.pathname;
 
-  if (p === '/v1' || p === '/v1/') {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { ok: false, message: 'method not allowed' });
-    let html;
-    try {
-      html = fs.readFileSync(INDEX_PATH);
-    } catch (e) {
-      return send(res, 500, 'index.html missing', 'text/plain; charset=utf-8');
-    }
-    res.writeHead(200, {
-      ...BASE_HEADERS,
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Length': html.length,
-      'Content-Security-Policy':
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-    });
-    return res.end(req.method === 'HEAD' ? undefined : html);
-  }
-
   // ---- dashboard v2: static files from web/app (same token rules as the page: none for static, ?t= used by its API calls) ----
   const rootAsset = p === '/' || p === '/index.html' || /^\/[\w.-]+\.(js|css)$/.test(p);
   if (rootAsset || p === '/v2' || p.startsWith('/v2/')) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { ok: false, message: 'method not allowed' });
-    if (p === '/v2') {
-      res.writeHead(302, { ...BASE_HEADERS, Location: '/v2/' + url.search });
+    if (p === '/v2' || p === '/v2/') {
+      res.writeHead(302, { ...BASE_HEADERS, Location: '/' + url.search });
       return res.end();
     }
     let rel;
@@ -621,29 +394,11 @@ async function handle(req, res) {
     case 'GET /api/snapshot':
       return send(res, 200, latestSnapshot || 'null');
 
-    case 'GET /api/events': {
-      res.writeHead(200, {
-        ...BASE_HEADERS,
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-store',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
-      res.write('retry: 3000\n\n');
-      if (latestSnapshot) res.write(`event: snapshot\ndata: ${latestSnapshot}\n\n`);
-      sseClients.add(res);
-      req.on('close', () => sseClients.delete(res));
-      return;
-    }
-
     case 'GET /api/clients':
       return sendJson(res, 200, { ok: true, pages: streamClients.size });
 
     case 'GET /api/stream':
-      return handleStream(req, res, url);
-
-    case 'POST /api/events':
-      return handleEvents(req, res);
+      return handleStream(req, res);
 
     case 'POST /api/snapshot': {
       let body;
@@ -658,7 +413,7 @@ async function handle(req, res) {
       latestSnapshot = JSON.stringify(body);
       armIdleTimer(IDLE_MS);
       broadcastSnapshot();
-      return sendJson(res, 200, { ok: true, clients: sseClients.size + streamClients.size });
+      return sendJson(res, 200, { ok: true, clients: streamClients.size });
     }
 
     case 'POST /api/command': {
@@ -699,7 +454,7 @@ async function handle(req, res) {
     case 'POST /api/result': {
       let body;
       try {
-        body = await readBody(req, 4 * 1024 * 1024); // file.read data can be ~1 MB once escaped
+        body = await readBody(req, 4 * 1024 * 1024);
       } catch (e) {
         return sendJson(res, e.status || 400, { ok: false, message: e.message });
       }
@@ -766,12 +521,6 @@ function shutdown(code) {
     } catch {}
   }
   pending.clear();
-  for (const res of sseClients) {
-    try {
-      res.end();
-    } catch {}
-  }
-  sseClients.clear();
   for (const res of streamClients) {
     try {
       res.end();

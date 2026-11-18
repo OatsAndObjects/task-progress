@@ -1,84 +1,55 @@
 # task-progress
 
-A Claude Code plugin (v1.0.0) that shows an estimated progress bar for the current task in a band above the prompt.
+A Claude Code plugin (v1.0.0). It shows an estimated progress bar above the prompt, runs an orchestrator mode with small executors, asks you to approve the plan as cubes, and has a small web dashboard with two screens (Cubes and Usage).
 
-- `TaskProgress` tool: the model reports task name, estimated total steps, steps done and a label; the band renders the bar.
-- `/progress` command: shows the current progress as plain text; `/progress clear` clears it.
+## Progress bar
 
-## Orchestrator mode (0.5.0)
+- `TaskProgress` tool: the model reports task name, estimated total steps, steps done and a label; the band above the prompt renders the bar.
+- `/progress`: shows the current progress as plain text; `/progress clear` clears it.
 
-On by default; `/orchestrate on|off|status`. When off, the plugin behaves like 0.4.0.
+## Orchestrator mode and executors
 
-**One orchestrator, small executors.** The main session plans and reviews; the `task-progress:executor` agent (Sonnet) executes one step each and ends with a fixed report (status, what changed, how verified, blockers). A short protocol is added to the system prompt while the mode is on; the full text is the `task-progress:orchestrate` skill. `TaskPlan` registers the plan (steps with minutes) and seeds the progress bar.
+On by default; `/tp-orchestrate on | off | status` (the plugin also ships a skill called `orchestrate`, so the engine refuses a bare `/orchestrate`). When off, only the progress bar remains.
 
-**Time budgets.** Every Agent dispatch must start with `[budget: <N>m step: <k>]`, otherwise it is refused. Sub-agents are identified by the `agentId` on their tool calls (from `agent.spawn`). Below 80% of the budget calls pass; from 80% the executor gets a one-time wrap-up notice; from 100% every tool call is refused (TaskProgress excepted) until it reports. The band shows a countdown per running executor (`step 2 · 3:40 left`), amber near the end, red when over. The clock ticks only while something is active.
+- The main session plans and reviews; the `task-progress:executor` agent (Sonnet) executes one step each and ends with a fixed report (status, what changed, how verified, blockers). A short protocol is added to the system prompt; the full text is the `task-progress:orchestrate` skill. `TaskPlan` registers the plan and seeds the progress bar.
+- **Time budgets.** Every Agent dispatch must start with `[budget: <N>m step: <k>]`, otherwise it is refused. Below 80% of the budget calls pass; from 80% the executor gets a one-time wrap-up notice; from 100% every tool call is refused (TaskProgress excepted) until it reports. The band shows a countdown per running executor.
+- **Input check.** `TaskInputs` records the inputs the task needs. After each new user prompt, Edit, Write, NotebookEdit, Bash, PowerShell and Agent are refused in the main session until it is called. Sub-agents are not gated.
+- If another plugin bypasses prompt.compose, the rules are attached to user prompts instead.
 
-**Input check.** `TaskInputs` records the inputs the task needs from the user. After each new user prompt, Edit, Write, NotebookEdit, Bash, PowerShell and Agent are refused in the main session until it is called (an empty list is fine); unanswered inputs keep the gate shut until the model asks them in one AskUserQuestion and calls it again with `asked: true`. Sub-agents are not gated.
+## Approval cubes
 
-## Session dashboard (0.6.0)
+For a multi-action task, Claude calls `TaskPlan` with `cubes` and stops. Each cube is one small, checkable piece of work; nothing runs until you approve it. Approve, edit and the other actions are done on the web dashboard (Cubes screen).
 
-The command is `/tp-dashboard` (Claude Code reserves `/dashboard`).
+**A cube** has an `id` (c1, c2, ...), a `title`, one `action` sentence, a `flow` of 2-6 function-level steps, `after` (cubes that must finish first), `doneWhen` (a check that proves it is done), optional `files`, and `minutes` (at most 10). The cubes form a graph; the progress bar mirrors it, one step per cube.
 
-- `/tp-dashboard` opens the dashboard pane beside the chat.
-- `/tp-dashboard web` starts the local web app (`web/server.js`, needs `node` on PATH) and prints its URL; the pane shows it too.
-- `/tp-dashboard web stop` stops the web server.
-- `/tp-dashboard close` closes the pane.
+**Flow (details).** Each flow step is `{ file, fn, does, calls? }`: the repo-relative path (or `shell`, `browser`, `terminal`), the function or command, one short sentence, and an optional `file:fn` of the next function it calls (the arrow shown between steps). A step missing `file`, `fn` or `does` is refused.
 
-Panels (pane and web app read the same snapshot):
+**Atomic rules.** The plan is refused whole, naming the cube to fix, when a cube has no action, an action over 200 characters, fewer than 2 or more than 6 flow steps, no `doneWhen`, no minutes or more than 10, or when ids repeat, `after` names an unknown cube, there is a cycle, or there are more than 40 cubes.
 
-- **Progress**: the current task, step of total and label, and whether orchestrator mode is on.
-- **Plan**: the TaskPlan steps with minutes and status (pending, running, done, skipped, over); a step turns over when its executor outlives its minutes.
-- **Agents**: dispatched sub-agents with type, step, budget and status; running ones have a stop button (TaskStop).
-- **Shells**: background Bash/PowerShell commands, closed by their task notification (done, failed with exit code, stopped); stop button while running.
-- **Files**: files changed by Edit/Write/NotebookEdit, newest first, with a change count.
-- **Tool log**: the last tool calls (one line each, failed ones marked; up to 200 kept).
-- **Tasks**: your own task board (add, edit, status, priority, delete, "send to Claude", which submits it as a prompt and marks it doing), kept across sessions.
-- **Message Claude** (web app): submits a prompt to the main session. Finished agents and shells can be cleared.
+**What you can do:**
 
-Security of the web app: it binds 127.0.0.1 only; every `/api/*` call needs a random per-session token (32 hex characters, header `X-TP-Token` or `?t=`, wrong token = 401); the Host header must be `127.0.0.1:<port>` or `localhost:<port>` (DNS-rebinding guard) and a browser Origin, when sent, must be the same origin (403 otherwise); bodies are capped at 1 MB and commands are validated against a fixed action list. It exits on its own about 35 s after the mod stops sending snapshots. Details: `web/README.md`.
+- **Approve**: runs when its dependencies are done; otherwise it is queued and starts by itself once they finish. Cubes that become ready together go to Claude in one prompt.
+- **Approve all**, **Edit** (edits must stay atomic), **Ask for a change** (Claude answers with `CubeRevise`, possibly splitting it), **Reject**, **Delete / Add / Move** (moving is refused if it would make a cycle).
+- **Ask** a question about a cube: it is sent as `[cube question <id> "<title>"] <text>`; Claude answers with `CubeAnswer` and the answer shows in the cube's thread. Asking never changes the cube.
 
-## Approval cubes (0.7.0)
+**Dispatch gate.** While orchestrator mode and the gate are on, an Agent dispatch must tag the cubes it runs, `[budget: 6m step: 2 cubes: c3]`. A dispatch for an unapproved, unknown or still-waiting cube is denied; an untagged dispatch is denied while the board has open work.
 
-For a multi-action task, Claude calls `TaskPlan` with `cubes` instead of plain steps and then stops. Each cube is one small, checkable piece of work, and nothing runs until you approve it.
+**PR review stage.** Every cube ends with a review: an executor runs the `pr-reviewer` skill and calls `CubeReview` (`verdict` APPROVE / REQUEST_CHANGES / NEEDS_INVESTIGATION, `summary`, `findings` P0-P3, `quiz`). With the gate on, a finished cube goes to `reviewing`; APPROVE makes it done and releases dependents; REQUEST_CHANGES reopens it. The review executor is dispatched with `[budget: <N>m step: <k> review: <id>]`. Escape hatch: `cube.markDone`.
 
-**How a task becomes cubes.** A cube has an `id` (c1, c2, ...), a `title`, one `action` sentence, a `flow` of 2-6 ordered function-level steps (see 0.10.0), `after` (cubes that must finish first), `doneWhen` (a check that proves it is done), optional `files`, and `minutes` (at most 10). The cubes form a graph; the plan section and the progress bar mirror it, one step per cube.
+`/tp-cubes on | off | status` turns the gate on or off for new boards and shows the counts.
 
-**Atomic rules.** The plan is refused whole, naming the cube to fix, when a cube has no action, an action over 200 characters, fewer than 2 or more than 6 flow steps ("Give cube cX at least 2 flow steps"), no `doneWhen`, no minutes or more than 10, or when ids repeat, `after` names an unknown cube, there is a cycle, or there are more than 40 cubes.
+## Auto /context then /clear
 
-**What you can do** (in the `/tp-dashboard` pane or the web app):
+When the last cube of a plan finishes, the plugin runs `/context`, saves the output (in `~/.claude/task-progress-context/` and on the dashboard), then runs `/clear`. This happens once per plan.
 
-- **Approve**: runs when its dependencies are done; otherwise it is **queued** and starts by itself once they finish. All cubes that become ready at once go to Claude in one prompt.
-- **Approve all**: approves every proposed cube; ready ones go out together, the rest queue.
-- **Edit**: change any field. An edit to an approved or queued cube sends it back to proposed with a new version. Edits must stay atomic.
-- **Ask for a change**: write a note; the cube turns to revising and Claude answers with `CubeRevise` (change fields, or split it with `splitInto`; cubes that waited on it then wait on the last piece). It comes back to you as proposed.
-- **Reject**: blocks the cubes that depend on it until you edit or delete it.
-- **Delete / Add / Move**: delete rewires `after` of the cubes that waited on it; add makes the next free id; moving (changing `after`) is refused if it would make a cycle. Running and finished cubes cannot be changed.
+## Web dashboard (Cubes and Usage)
 
-**Dispatch gate.** While orchestrator mode is on and the gate is on, a main-session Agent dispatch must tag the cubes it runs in its budget line, `[budget: 6m step: 2 cubes: c3]`. A dispatch that tags an unapproved cube, an unknown cube, or a queued cube still waiting on dependencies is denied; an untagged dispatch is denied while the board has open work. Approved cubes pass. With orchestrator mode off nothing is gated.
+- `/tp-dashboard web` starts the local web app (`web/server.js`, needs `node` on PATH) and opens it; `/tp-dashboard web stop` stops it.
+- `/tp-dashboard auto on|off` turns the auto-open on or off. By default it starts and opens once per session.
+- **Cubes**: the plan as approval cubes with flow, review and all the actions above.
+- **Usage**: context, 5-hour and weekly limits, cost, tokens, and who used them (by cube, executor, model, biggest tool results).
 
-**`/tp-cubes on | off | status`** turns the gate on or off for new boards and shows the counts (waiting, approved, running, done). In the web API the cube sentence is sent as `actionText` because `action` names the command.
-
-**Slash commands.** The plugin also ships a skill called `orchestrate`, so the engine refuses a bare `/orchestrate` command; use `/tp-orchestrate on | off | status` (or `/task-progress:orchestrate` for the skill).
-
-## Bypassed prompt.compose (0.7.1)
-
-If another plugin bypasses prompt.compose, the rules are attached to user prompts instead (in full on the first prompt, then a one-line reminder while orchestrator mode is on).
-
-## Night-sky restyle (0.8.0)
-
-Night-sky dashboard restyle. Web: starfield, constellation progress, countdown rings, telemetry log, glass kanban, light theme. Pane: bordered sections with glyphs, ▰▱ budget bars.
-
-## Ask about a cube (0.9.0)
-
-On the web dashboard each cube has an **Ask** button ("Questions only - the cube stays as it is") that opens a small chat about that step; it is separate from the change-request button. A question is sent to the session as `[cube question <id> "<title>"] <text>`; Claude answers with the `CubeAnswer` tool (`id`, `answer`) and the answer shows in that cube's thread. Asking never changes, approves, revises or dispatches the cube, and does not bump its version. Threads keep the last 50 messages (2000 characters each); the pane only shows a `💬 n` count.
-
-## Function-level cube flow (0.10.0)
-
-Each flow step is now an object, not a sentence: `{ file, fn, does, calls? }`. `file` is the repo-relative path (or `shell`, `browser`, `terminal` for non-code steps), `fn` the function, method or component (for non-code steps the command or tool, such as `claude plugin test`), `does` one short sentence, and `calls` an optional `file:fn` of the next function it calls. Break every cube down to functions. A step missing `file`, `fn` or `does` is refused with `flow[2] needs file, fn and does - e.g. {...}`; caps are 200, 120, 200 and 240 characters. Boards stored before 0.10.0 with string steps still load and show the text as the step. The pane shows `1 register.tsx > onPromptSubmit()  resets the input gate` and `-> dashboard.tsx:onPromptSubmit`.
-
-## PR review stage (pr-reviewer skill) (0.10.0)
-
-Every cube ends with a PR review. After the cube's executor reports, the orchestrator dispatches an executor that runs the `pr-reviewer` skill on the cube's changed files and calls the new `CubeReview` tool (`id`, `verdict` APPROVE / REQUEST_CHANGES / NEEDS_INVESTIGATION, `summary`, optional `understanding`, `findings` P0-P3 with file and line, `quiz`). The review is kept on the cube (`review.status` running, passed, changes or investigate; at most 50 findings, 10 quiz questions, 4000 characters per text). APPROVE lets the cube be marked done; REQUEST_CHANGES reopens it (done becomes approved) and tells Claude to dispatch a fix executor for the P0/P1 findings and review again. The dashboard command `cube.review {id}` starts a review from the UI: it sets `review.status` to running and sends a `[cube review <id> "<title>"]` prompt. The pane shows `review ✓ APPROVE`, `review ✗ REQUEST CHANGES · P1×2` or `review ◐ running`. `CubeReview` is never blocked by the orchestrator gates. The review executor is dispatched with the budget tag `[budget: <N>m step: <k> review: <id>]` (0.10.2): the gate allows it for a cube that is reviewing (or done/failed, for a re-review), refuses it for any other state and refuses a line that carries both `cubes:` and `review:`; a review agent is never recorded as the cube's executor, so its turn ending cannot change the cube's status.
+The web app binds 127.0.0.1 only; every `/api/*` call needs a random per-session token (wrong token = 401); the Host header is checked (DNS-rebinding guard) and a browser Origin must be the same origin; bodies are capped at 1 MB and commands are validated against a fixed action list. It exits on its own about 35 s after the plugin stops sending snapshots. Details: `web/README.md`. `/?demo=1` renders both screens with sample data.
 
 ## Install (local directory marketplace)
 
@@ -88,28 +59,3 @@ Place this folder inside a directory that you add as a local marketplace, then i
     /plugin install task-progress@<marketplace-name>
 
 Plugin manifest: `.claude-plugin/plugin.json`. Hook module: `hooks/register.tsx`.
-
-## Review gates done (0.10.1)
-
-With the gate on, a cube whose executor finishes goes to `reviewing` (pane glyph `◐`, "in review"), not `done`; dependents keep waiting because only `done` satisfies `after`, and Claude is told `Cube <id> is in review: dispatch a review executor (Skill "pr-reviewer" on its files), then CubeReview.` `CubeReview` APPROVE makes it `done` and releases dependents; REQUEST_CHANGES reopens it to `approved` for a fix; NEEDS_INVESTIGATION leaves it in review. Escape hatch: `cube.markDone {id}` (web button "Mark done") forces a cube in review, failed or approved to done. With the gate off a finished cube is done as before. Editing a legacy cube without a new flow no longer fails. The web dashboard now shows object flow steps, edits them as file/fn/does/calls inputs, shows the review line and a Run review button, and accepts `cube.review`.
-
-## Dashboard v2 (1.0.0)
-
-The web dashboard is now the v2 app (`web/app`), served at `/`. The old single-page dashboard stays at `/v1/` and `/v2/` still works. The mod always opens `/?t=<token>`.
-
-**Screens** (hash routes, phone-first, also fine on a wide window):
-
-- `#session`: live chat with Claude (streamed text, tool calls, executors, permission cards, queued prompts).
-- `#board`: tickets kanban (add, edit, move, send to Claude), kept across sessions.
-- `#cubes`: approval cubes with flow, review and the same actions as the pane.
-- `#review`: PR review reports, findings by severity and the quiz.
-- `#files`: files Claude changed, with the git diff and an **Open in editor** button (VS Code or Android Studio, at a line).
-- `#usage`: tokens, cost and the tools breakdown.
-
-**Auto-open.** The dashboard opens in your browser when it starts. `/tp-dashboard auto on|off` turns that on or off.
-
-**Allow / Deny in the browser.** A permission prompt also appears on the web page. You have 7 seconds to answer there; after that it falls back to the terminal prompt.
-
-**Demo mode.** `/?demo=1` renders every screen with sample data and no backend.
-
-Other: the event stream drops slow clients (2 MB backlog) on both the v1 and v2 streams; git calls run with `core.fsmonitor=false`; editor launchers that are `.cmd`/`.bat` files only start when every path uses plain characters.

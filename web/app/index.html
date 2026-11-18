@@ -11,11 +11,7 @@
 <div class="app">
   <nav class="rail" aria-label="Main">
     <div class="logo"><b>&#10022;</b></div>
-    <button class="navb" data-nav="session"><span data-ic="chat"></span>Session</button>
-    <button class="navb" data-nav="board"><span data-ic="board"></span>Board</button>
     <button class="navb" data-nav="cubes"><span data-ic="cube"></span>Cubes</button>
-    <button class="navb" data-nav="review"><span data-ic="shield"></span>Review<span class="dotc" id="review-badge" hidden></span></button>
-    <button class="navb" data-nav="files"><span data-ic="file"></span>Files</button>
     <button class="navb" data-nav="usage"><span data-ic="gauge"></span>Usage</button>
   </nav>
   <div class="main">
@@ -28,17 +24,11 @@
         <div class="mm" id="mm-5h" hidden><span></span><i><u></u></i></div>
         <div class="mm" id="mm-week" hidden><span></span><i><u></u></i></div>
       </div>
-      <button class="btn sm danger" data-act="stop">Stop</button>
       <button class="btn sm hidem" data-act="palette"><span data-ic="search"></span>Search <kbd>Ctrl K</kbd></button>
-      <button class="btn pri" data-act="newTicket"><span data-ic="plus"></span>New ticket <kbd style="background:rgba(0,0,0,.25);color:#fff">N</kbd></button>
     </header>
     <div class="banner" id="banner" role="alert"></div>
     <div class="screens">
-      <section class="screen" id="screen-session" hidden><div class="empty"><div class="card"><h2>Nothing to show yet</h2><p>The conversation, plan and live activity of this session will appear here.</p></div></div></section>
-      <section class="screen" id="screen-board" hidden><div class="empty"><div class="card"><h2>No tickets yet</h2><p>Press N to add the first ticket to the board.</p></div></div></section>
       <section class="screen" id="screen-cubes" hidden><div class="empty"><div class="card"><h2>No cubes planned</h2><p>When Claude plans work in cubes, you will approve them here.</p></div></div></section>
-      <section class="screen" id="screen-review" hidden><div class="empty"><div class="card"><h2>Nothing to review</h2><p>Finished cubes waiting for your review will show up here.</p></div></div></section>
-      <section class="screen" id="screen-files" hidden><div class="empty"><div class="card"><h2>No files touched yet</h2><p>Files Claude reads, edits or writes will be listed here.</p></div></div></section>
       <section class="screen" id="screen-usage" hidden><div class="empty"><div class="card"><h2>No usage data yet</h2><p>Context, 5-hour and weekly limits will be shown here.</p></div></div></section>
     </div>
   </div>
@@ -47,11 +37,7 @@
 <div class="toast" id="toast" role="status"></div>
 <script src="core.js"></script>
 <script src="demo.js"></script>
-<script src="session.js"></script>
-<script src="board.js"></script>
 <script src="cubes.js"></script>
-<script src="review.js"></script>
-<script src="files.js"></script>
 <script src="usage.js"></script>
 <script>TP.boot();</script>
 </body>

@@ -331,3 +331,72 @@ test('a cube tool handler that throws still answers with a result', async () => 
   expect(r.result).toContain('boom')
   expect(r.result).toContain('Do not repeat the call')
 })
+
+const ONE_CUBE = { id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }
+const TWO_CUBES = [ONE_CUBE, { ...ONE_CUBE, id: 'c2' }]
+
+function ctxSetup($: any, on: any, fail?: string) {
+  const s = setup($, on)
+  const calls: string[] = []
+  const writes: { path: string; text: string }[] = []
+  const toasts: string[] = []
+  on('command.run', { command: 'context' }, () => {
+    calls.push('context')
+    if (fail === 'context') throw new Error('nope')
+    return { text: 'CONTEXT MAP' }
+  })
+  on('command.run', { command: 'clear' }, () => {
+    calls.push('clear')
+    return { text: '' }
+  })
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.write', (_: any, e: any) => {
+    writes.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
+  on('ui.toast', (_: any, e: any) => {
+    toasts.push(String(e.text ?? e.message ?? JSON.stringify(e)))
+    return { value: undefined }
+  })
+  on('turn.complete', (_: any, e: any) => ({ text: String(e.answer ?? '') }))
+  // Gate off: an executor that finishes its cube makes it done at once.
+  const finish = async (id: string, n: number) => {
+    await $.agent.spawn({ prompt: `[budget: 3m step: ${n} cubes: ${id}]
+work`, description: 'step', subagentType: 'task-progress:executor' })
+    await $.turn.complete({ agentId: `a${n}`, reason: 'answer', answer: 'done' } as any)
+  }
+  const plan = async (cubes: any[]) => {
+    await s.start()
+    await $.command.run({ command: 'tp-cubes', args: 'off' })
+    await s.call(INPUTS, { inputs: [], asked: false })
+    await s.call(PLAN, { task: 'T', cubes })
+  }
+  return { ...s, calls, writes, toasts, finish, plan }
+}
+
+test('last cube done: /context then /clear once, context saved; no repeat', async ($, on) => {
+  const { clock, calls, writes, finish, plan } = ctxSetup($, on)
+  await plan(TWO_CUBES)
+  await finish('c1', 1)
+  await clock.advance(5000)
+  expect(calls).toEqual([])
+  await finish('c2', 2)
+  await clock.advance(5000)
+  expect(calls).toEqual(['context', 'clear'])
+  expect(writes.length).toBe(1)
+  expect(writes[0].path).toMatch(/context-.*.txt$/)
+  expect(writes[0].path).not.toMatch(/Tdd:/)
+  expect(writes[0].text).toBe('CONTEXT MAP')
+  await $.turn.complete({ agentId: 'a2', reason: 'answer', answer: 'again' } as any)
+  await clock.advance(5000)
+  expect(calls).toEqual(['context', 'clear'])
+})
+
+test('a failing /context does not throw and shows a toast', async ($, on) => {
+  const { clock, calls, toasts, finish, plan } = ctxSetup($, on, 'context')
+  await plan([ONE_CUBE])
+  await finish('c1', 1)
+  await clock.advance(5000)
+  expect(calls).toEqual(['context'])
+  expect(toasts.join(' ')).toContain('failed')
+})

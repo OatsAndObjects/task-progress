@@ -26,11 +26,14 @@ export type CubeSpec = {
   after: string[]
   doneWhen: string
   files?: string[]
+  /** Optional plain-words paragraph: what, why, touches, risks. */
+  details?: string
   minutes: number
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 const strList = (v: unknown) => (Array.isArray(v) ? v.map(x => str(x)).filter(x => x !== '') : [])
+const DETAILS_MAX = 1200
 const FLOW_FILE_MAX = 200
 const FLOW_FN_MAX = 120
 const FLOW_DOES_MAX = 200
@@ -72,6 +75,7 @@ export function normalizeCube(raw: any, fallbackId = ''): CubeSpec {
   const title = str(raw?.title) || action.slice(0, TITLE_MAX)
   const files = strList(raw?.files)
   const minutes = Number(raw?.minutes)
+  const details = str(raw?.details).slice(0, DETAILS_MAX)
   return {
     id: (str(raw?.id) || fallbackId).toLowerCase(),
     title: title.slice(0, TITLE_MAX),
@@ -80,6 +84,7 @@ export function normalizeCube(raw: any, fallbackId = ''): CubeSpec {
     after: idList(raw?.after),
     doneWhen: str(raw?.doneWhen),
     ...(files.length > 0 ? { files } : {}),
+    ...(details ? { details } : {}),
     minutes: Number.isFinite(minutes) ? minutes : NaN,
   }
 }
@@ -225,6 +230,12 @@ export function blockedBy(board: CubeBoard, c: Cube): Cube | null {
 }
 
 /** True when the board still has work that is not finished. */
+/** True when the board has cubes and every one that is not rejected/deleted is done. */
+export function allCubesDone(board: CubeBoard | null | undefined): boolean {
+  const live = (board?.cubes ?? []).filter(c => (c.status as string) !== 'rejected' && (c.status as string) !== 'deleted')
+  return live.length > 0 && live.every(c => c.status === 'done')
+}
+
 export function isBoardOpen(board: CubeBoard | null | undefined): boolean {
   return !!board && board.cubes.some(c => !CLOSED.includes(c.status))
 }
@@ -237,13 +248,14 @@ const spec = (c: Cube): CubeSpec => ({
   after: c.after,
   doneWhen: c.doneWhen,
   ...(c.files ? { files: c.files } : {}),
+  ...(c.details ? { details: c.details } : {}),
   minutes: c.minutes,
 })
 
 /** Applies fields from `patch` (only the ones given) to a cube's spec. */
 function patched(c: Cube, patch: any): CubeSpec {
   const merged: any = { ...spec(c) }
-  for (const k of ['title', 'action', 'flow', 'after', 'doneWhen', 'files', 'minutes']) {
+  for (const k of ['title', 'action', 'flow', 'after', 'doneWhen', 'files', 'details', 'minutes']) {
     if (patch?.[k] !== undefined) merged[k] = patch[k]
   }
   merged.id = c.id
@@ -270,6 +282,8 @@ export function editCube(board: CubeBoard, id: string, patch: any, by: 'user' | 
     status: isReset ? 'proposed' : c.status,
   }
   if (!s.files) delete next.files
+  // An explicit empty `details` clears it; a patch without `details` keeps the old one.
+  if (patch?.details !== undefined && !s.details) delete next.details
   if (by === 'claude') delete next.note
   return { board: withLanes({ ...board, cubes: board.cubes.map(x => (x.id === id ? next : x)) }) }
 }
@@ -602,7 +616,7 @@ async function commit(d: CubeDeps, board: CubeBoard, extra: Cube[] = []): Promis
 export function cubeFields(cmd: DashboardCommand): Record<string, unknown> {
   const text = cmd.actionText ?? cmd.cubeAction
   const out: Record<string, unknown> = {}
-  for (const k of ['title', 'flow', 'after', 'doneWhen', 'files', 'minutes']) if (cmd[k] !== undefined) out[k] = cmd[k]
+  for (const k of ['title', 'flow', 'after', 'doneWhen', 'files', 'details', 'minutes']) if (cmd[k] !== undefined) out[k] = cmd[k]
   if (text !== undefined) out.action = text
   return out
 }
@@ -648,6 +662,13 @@ function approveOne(board: CubeBoard, id: string): { board: CubeBoard; isReady: 
   return { board: next, isReady }
 }
 
+/** Names the unfinished cubes a queued cube waits for: "c6 starts after c5". */
+function waitText(board: CubeBoard, id: string): string {
+  const c = board.cubes.find(x => x.id === id)
+  const w = (c?.after ?? []).filter(a => board.cubes.find(x => x.id === a)?.status !== 'done')
+  return `${id} starts after ${w.join(', ')}`
+}
+
 /** The `cube.*` and `cubes.*` dashboard commands; null for any other action. */
 export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promise<DashboardCommandResult | null> {
   const action = String(cmd?.action ?? '')
@@ -667,7 +688,7 @@ export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promis
       const r = approveOne(board, id)
       if ('error' in r) return fail(r.error)
       const ready = await commit(d, r.board, r.isReady ? [r.board.cubes.find(c => c.id === id)!] : [])
-      return ok(ready.some(c => c.id === id) ? `cube ${id} approved and sent to Claude` : `cube ${id} queued: it runs once its dependencies are done`)
+      return ok(ready.some(c => c.id === id) ? `cube ${id} approved and sent to Claude` : `cube ${id} approved, not started yet: ${waitText(r.board, id)}`)
     }
     case 'cube.approveAll': {
       let b = board
@@ -683,7 +704,9 @@ export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promis
       }
       if (ready.length === 0 && queued === 0) return fail('no proposed cubes to approve')
       const sent = await commit(d, b, ready)
-      return ok(`${sent.length} cube${sent.length === 1 ? '' : 's'} sent to Claude, ${queued} queued`)
+      const waiting = b.cubes.filter(c => c.status === 'queued').map(c => waitText(b, c.id))
+      const sentIds = sent.map(c => c.id).join(', ')
+      return ok(`${sentIds || 'nothing'} sent to Claude${waiting.length ? '; ' + waiting.join('; ') : ''}`)
     }
     case 'cube.markDone': {
       // Escape hatch: force a cube done without a review (nothing deadlocks if the review cannot run).

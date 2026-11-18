@@ -471,3 +471,81 @@ test('review: on approved or running cubes is denied', async () => {
   running(g)
   expect(gateCheck(g.board(), undefined, ['c1'])).toContain('not in review')
 })
+
+test('cube details: stored, revised, kept, cut, optional', () => {
+  const r: any = buildBoard('T', [ok('c1', [], { details: '  Plain words.  ' }), ok('c2')], true)
+  expect(r.error).toBeUndefined()
+  const by = (b: any, id: string) => b.cubes.find((c: any) => c.id === id)
+  expect(by(r.board, 'c1').details).toBe('Plain words.')
+  expect(by(r.board, 'c2').details).toBeUndefined()
+  expect(checkAtomic(normalizeCube(ok('c2')))).toBeNull()
+  const kept: any = reviseCube(r.board, { id: 'c1', title: 'new title' })
+  expect(by(kept.board, 'c1').details).toBe('Plain words.')
+  const upd: any = reviseCube(r.board, { id: 'c1', details: 'Changed.' })
+  expect(by(upd.board, 'c1').details).toBe('Changed.')
+  expect(normalizeCube(ok('c1', [], { details: 'x'.repeat(2000) })).details!.length).toBe(1200)
+  expect(normalizeCube(ok('c1', [], { details: 5 })).details).toBeUndefined()
+  const split: any = reviseCube(r.board, { id: 'c2', splitInto: [ok('c2', [], { details: 'A' }), ok('c2-2', [], { details: 'B' })] })
+  expect(by(split.board, 'c2').details).toBe('A')
+  expect(by(split.board, 'c2-2').details).toBe('B')
+  const cleared: any = reviseCube(r.board, { id: 'c1', details: '' })
+  expect(by(cleared.board, 'c1').details).toBeUndefined()
+})
+
+test('approveAll via the real line parser: whitespace/case in the id, args {} or missing, prompt submitted', async () => {
+  for (const msg of [
+    { type: 'command', id: 'k1', action: 'cube.approveAll', args: {} },
+    { type: 'command', id: 'k2', action: 'cube.approveAll' },
+  ]) {
+    const g = rig([ok('c1'), ok('c2'), ok('c3', ['c1'])])
+    const { cmd } = commandFromLine(msg as any)
+    const res: any = await runCubeCommand(cmd, g.d)
+    expect(res.ok).toBe(true)
+    expect(g.prompts.length).toBe(1)
+    expect(g.prompts[0]).toContain('c1')
+    expect(g.prompts[0]).toContain('c2')
+    expect(res.message).toBe('c1, c2 sent to Claude; c3 starts after c1')
+  }
+})
+
+test('approve names what a waiting cube waits for', async () => {
+  const g = rig([ok('c1'), ok('c2', ['c1'])])
+  const res: any = await run(g.d, 'cube.approve', { id: 'c2' })
+  expect(res.message).toBe('cube c2 approved, not started yet: c2 starts after c1')
+  expect(g.prompts.length).toBe(0)
+})
+
+test('waiting cube is released after the dependency review APPROVE and after markDone', async () => {
+  for (const how of ['review', 'markDone']) {
+    const g = rig([ok('c1'), ok('c2', ['c1'])])
+    await run(g.d, 'cube.approveAll')
+    expect(g.prompts.length).toBe(1)
+    running(g)
+    await finishAndRelease(g.d, 'a1', true)
+    expect(g.st('c2')).toBe('queued')
+    const before = g.prompts.length
+    if (how === 'review') await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
+    else await run(g.d, 'cube.markDone', { id: 'c1' })
+    expect(g.st('c2')).toBe('approved')
+    expect(g.prompts.length).toBe(before + 1)
+    expect(g.prompts[before]).toContain('approved cube c2')
+  }
+})
+
+test('a release while a turn runs is handed to submit, which queues it for the idle session', async () => {
+  const g = rig([ok('c1'), ok('c2', ['c1'])])
+  // submit resolves late, as when a turn is running; the release must still be sent exactly once
+  let calls = 0
+  g.d.submit = async (t: string) => {
+    calls++
+    await new Promise(r => setTimeout(r, 20))
+    g.prompts.push(t)
+  }
+  await run(g.d, 'cube.approveAll')
+  running(g)
+  await finishAndRelease(g.d, 'a1', true)
+  await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
+  expect(g.st('c2')).toBe('approved')
+  expect(g.prompts.filter(p => p.includes('approved cube c2')).length).toBe(1)
+  expect(calls).toBe(3)
+})

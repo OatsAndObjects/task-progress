@@ -3,11 +3,11 @@
 Opened from Claude Code with `/tp-dashboard web` (the command is `/tp-dashboard` because
 Claude Code reserves `/dashboard`); `/tp-dashboard web stop` stops this server.
 
-A localhost page for the task-progress mod: progress, plan, agents, background shells,
-files changed, tool log, a task board and a "Message Claude" box.
+A localhost dashboard for the task-progress mod with two screens: Cubes (the plan as
+approval cubes: approve, edit, review, ask) and Usage.
 
 - `server.js` — plain Node (>= 18), no dependencies. The mod starts it as a child process.
-- `index.html` — the page, one self-contained file (inline CSS + JS, no CDN).
+- `app/` — the page (`index.html`, `core.js`, `cubes.js`, `usage.js`, `demo.js`, `styles.css`), served at `/` (`/v2` redirects there; `?demo=1` shows sample data).
 
 ## Start
 
@@ -29,12 +29,12 @@ stdout carries only JSON lines; logs go to stderr.
 
 ```
 {"type":"ready","port":7377}
-{"type":"command","id":"<uuid>","action":"task.update","status":"done","args":{"id":"t1","status":"done"}}
+{"type":"command","id":"<uuid>","action":"cube.approve","args":{"id":"c1"}}
 {"type":"error","message":"..."}          // only when it cannot start, then it exits
 ```
 
 `id` is always the **command id** — echo it back in `/api/result`. Several actions carry
-their own target `id` (agent, shell, task), so the full arguments are under `args`
+their own target `id` (the cube), so the full arguments are under `args`
 (canonical: read the target as `args.id`). The other arguments are also flattened onto the
 line for convenience; the target `id` is not, because it would clash.
 
@@ -49,7 +49,7 @@ Host must be `127.0.0.1:<port>` or `localhost:<port>` (DNS-rebinding guard) and 
 | GET | `/` | browser | the page (no token needed; it holds no data) |
 | POST | `/api/snapshot` | mod | full Snapshot JSON; kept and pushed to browsers |
 | GET | `/api/snapshot` | any | latest snapshot, or `null` |
-| GET | `/api/events` | browser | SSE: `event: snapshot` on connect (if any) and on each update; `: hb` comment every 15 s |
+| GET | `/api/stream` | browser | SSE: `event: snapshot` on connect (if any) and on each update; `: hb` comment every 15 s; slow clients (2 MB backlog) are dropped |
 | POST | `/api/command` | browser | `{action, ...args}`; validated, printed to stdout, held until the mod answers; replies `{ok,message}`; 504 after 10 s |
 | POST | `/api/result` | mod | `{id, ok, message}`; resolves the held command (404 if the id is unknown or timed out) |
 
@@ -57,16 +57,6 @@ Actions and their arguments:
 
 | action | args |
 |---|---|
-| `agent.stop` | `id` |
-| `shell.stop` | `id` |
-| `step.set` | `k` (integer or string), `status` (pending, running, done, skipped, over) |
-| `items.clearFinished` | none (the page sends it from both the Agents and Shells cards; clear both) |
-| `task.add` | `title`, `notes?`, `priority?` (low, med, high) |
-| `task.update` | `id` and at least one of `title`, `notes`, `status` (todo, doing, blocked, done), `priority`; unknown fields are rejected |
-| `task.delete` | `id` |
-| `task.send` | `id` |
-| `prompt.send` | `text` |
-| `orchestrate.set` | `on` (boolean) |
 | `cube.approve` | `id` |
 | `cube.approveAll` | none (approves every `proposed` cube) |
 | `cube.reject` | `id`, `note?` |

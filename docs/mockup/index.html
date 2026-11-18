@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task Progress v2 - mockup</title>
+<style>
+:root{
+  --bg-0:#060914; --bg-1:#0B1230; --bg-2:#101A40;
+  --surface:#0F1733; --surface-2:#141E42; --surface-3:#1A2552;
+  --text:#E7EBFB; --muted:#98A4CC; --faint:#6A75A0;
+  --line:rgba(165,180,252,.12); --line-2:rgba(165,180,252,.24);
+  --star:#A5B4FC; --accent:#0A84FF; --cur:#0060DF; --shimmer:#7DD3FC;
+  --warn:#F59E0B; --danger:#F87171; --ok:#5EEAB4;
+  --warn-soft:rgba(245,158,11,.14); --danger-soft:rgba(248,113,113,.14); --ok-soft:rgba(94,234,180,.13); --accent-soft:rgba(10,132,255,.18);
+  --grad:linear-gradient(135deg,#A5B4FC,#0A84FF);
+  --shadow:0 18px 50px rgba(0,0,0,.45);
+  --code:#0A1028;
+  --s1:8px; --s2:12px; --s3:16px; --s4:24px; --s5:32px; --s6:48px;
+  --r:14px; --r-sm:10px;
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mono:"Cascadia Code","Cascadia Mono",ui-monospace,Consolas,monospace;
+  --stars:.55;
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --bg-0:#F3F5FC; --bg-1:#EAEEFB; --bg-2:#E1E7F8;
+    --surface:#FFFFFF; --surface-2:#F5F7FE; --surface-3:#E9EEFC;
+    --text:#141A38; --muted:#52608F; --faint:#7E89B0;
+    --line:rgba(40,60,140,.11); --line-2:rgba(40,60,140,.22);
+    --star:#4F5FD1; --accent:#0060DF; --shimmer:#0A84FF;
+    --warn:#B45309; --danger:#C2410C; --ok:#047857;
+    --warn-soft:rgba(245,158,11,.16); --danger-soft:rgba(220,38,38,.1); --ok-soft:rgba(5,150,105,.12); --accent-soft:rgba(0,96,223,.1);
+    --grad:linear-gradient(135deg,#6366F1,#0060DF);
+    --shadow:0 18px 50px rgba(30,45,110,.18);
+    --code:#F1F4FD; --stars:0;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:15px/1.55 var(--sans);color:var(--text);background:var(--bg-0);overflow:hidden;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:var(--stars);
+  background-image:radial-gradient(1.2px 1.2px at 12% 18%,#A5B4FC,transparent),radial-gradient(1px 1px at 78% 12%,#7DD3FC,transparent),radial-gradient(1.4px 1.4px at 44% 64%,#A5B4FC,transparent),radial-gradient(1px 1px at 90% 72%,#fff,transparent),radial-gradient(1px 1px at 28% 88%,#7DD3FC,transparent),radial-gradient(1.2px 1.2px at 62% 36%,#fff,transparent);
+  background-size:520px 460px}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--shimmer);outline-offset:2px;border-radius:8px}
+h1,h2,h3,h4,p{margin:0}
+.mono{font-family:var(--mono);font-size:.86em}
+.muted{color:var(--muted)} .faint{color:var(--faint)}
+.sr{position:absolute;left:-9999px}
+
+/* shell */
+.app{position:relative;display:grid;grid-template-columns:104px 1fr;height:100vh;height:100dvh}
+.rail{display:flex;flex-direction:column;align-items:stretch;gap:var(--s1);padding:var(--s4) var(--s2);background:linear-gradient(180deg,var(--bg-1),var(--bg-0));border-right:1px solid var(--line)}
+.logo{display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:var(--s4);font-weight:650;font-size:13px;color:var(--muted)}
+.logo b{font-size:22px;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.navb{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 4px;border:0;border-radius:var(--r);background:transparent;color:var(--muted);font-size:13px;font-weight:550;transition:background .15s,color .15s}
+.navb svg{width:22px;height:22px}
+.navb:hover{background:var(--surface-2);color:var(--text)}
+.navb.on{background:var(--accent-soft);color:var(--text)}
+.navb.on svg{color:var(--shimmer)}
+.navb .dotc{position:absolute;margin-left:22px;margin-top:-4px;min-width:18px;height:18px;border-radius:9px;background:var(--warn);color:#1a1200;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 5px}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.top{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg-1) 80%,transparent);backdrop-filter:blur(10px);flex-wrap:wrap}
+.sess{min-width:0;flex:1 1 220px}
+.sess b{display:block;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess span{font-size:12.5px;color:var(--faint);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;background:var(--surface-2);font-size:12.5px;font-weight:600;color:var(--muted);white-space:nowrap}
+.chip.ok{background:var(--ok-soft);color:var(--ok)} .chip.warn{background:var(--warn-soft);color:var(--warn)} .chip.bad{background:var(--danger-soft);color:var(--danger)} .chip.blue{background:var(--accent-soft);color:var(--shimmer)}
+@media (prefers-color-scheme:light){.chip.blue{color:var(--accent)}}
+.pulse{width:8px;height:8px;border-radius:50%;background:currentColor;animation:pl 1.6s infinite}
+@keyframes pl{50%{opacity:.35}}
+.meters{display:flex;gap:var(--s3)}
+.mm{width:92px;font-size:12px;color:var(--muted)}
+.mm i{display:block;height:5px;border-radius:3px;background:var(--surface-3);margin-top:5px;overflow:hidden}
+.mm i u{display:block;height:100%;background:var(--grad);border-radius:3px}
+.mm.hot i u{background:var(--warn)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 18px;border-radius:12px;border:1px solid var(--line-2);background:var(--surface-2);font-weight:600;font-size:14px;transition:transform .12s,background .15s,border-color .15s;white-space:nowrap}
+.btn:hover{background:var(--surface-3);border-color:var(--star)}
+.btn:active{transform:translateY(1px)}
+.btn svg{width:16px;height:16px}
+.btn.pri{background:var(--grad);border-color:transparent;color:#fff}
+.btn.pri:hover{filter:brightness(1.1)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{background:var(--surface-2);color:var(--text)}
+.btn.danger{color:var(--danger);border-color:var(--danger-soft);background:var(--danger-soft)}
+.btn.sm{padding:6px 12px;font-size:13px;border-radius:10px}
+kbd{font:600 11px var(--mono);padding:2px 6px;border-radius:6px;background:var(--surface-3);color:var(--muted)}
+.screens{flex:1;min-height:0;position:relative}
+.screen{display:none;position:absolute;inset:0;overflow:auto;padding:var(--s5)}
+.screen.on{display:block}
+#s-session.on{display:flex;padding:0}
+.ph{display:flex;align-items:flex-end;gap:var(--s4);flex-wrap:wrap;margin-bottom:var(--s5)}
+.ph h1{font-size:26px;letter-spacing:-.01em}
+.ph p{color:var(--muted);margin-top:4px;max-width:60ch}
+.ph .sp{flex:1}
+.card{background:var(--surface);border-radius:var(--r);padding:var(--s4);box-shadow:0 1px 0 var(--line) inset,0 6px 24px rgba(0,0,0,.12)}
+.sep{height:1px;background:var(--line);margin:var(--s3) 0}
+
+/* session */
+.chatcol{flex:1;display:flex;flex-direction:column;min-width:0}
+.thread{flex:1;overflow:auto;padding:var(--s5) var(--s4) var(--s4)}
+.thread>.in{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:var(--s4)}
+.ub{align-self:flex-end;max-width:78%;background:var(--grad);color:#fff;padding:14px 18px;border-radius:18px 18px 4px 18px}
+.ub .qb{display:inline-block;margin-top:8px;font-size:12px;font-weight:600;background:rgba(0,0,0,.25);padding:2px 10px;border-radius:99px}
+.cm{display:flex;gap:var(--s3)}
+.av{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:13px;background:var(--surface-3);color:var(--star)}
+.av.c{background:var(--grad);color:#fff;font-size:16px}
+.av.y{background:#33405f;color:#E7EBFB} .av.e{background:var(--ok-soft);color:var(--ok)}
+.cm .body{flex:1;min-width:0}
+.cm p{margin-bottom:10px} .cm p:last-child{margin-bottom:0}
+.cm code,.md code{font:13px var(--mono);background:var(--surface-3);padding:1px 6px;border-radius:6px}
+.cm ul{margin:6px 0 10px;padding-left:22px} .cm li{margin:3px 0}
+.caret{display:inline-block;width:8px;height:1.05em;background:var(--shimmer);vertical-align:-3px;margin-left:2px;animation:bl 1s steps(2) infinite}
+@keyframes bl{50%{opacity:0}}
+details.tc{background:var(--surface);border-radius:12px;margin:2px 0}
+details.tc>summary{list-style:none;display:flex;align-items:center;gap:var(--s2);padding:12px 16px;cursor:pointer;border-radius:12px}
+details.tc>summary::-webkit-details-marker{display:none}
+details.tc>summary:hover{background:var(--surface-2)}
+details.tc .tool{font:600 12px var(--mono);padding:3px 10px;border-radius:8px;background:var(--accent-soft);color:var(--shimmer)}
+@media (prefers-color-scheme:light){details.tc .tool{color:var(--accent)}}
+details.tc .sum{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:14px}
+details.tc .chev{transition:transform .15s;color:var(--faint)}
+details[open]>summary .chev{transform:rotate(90deg)}
+details.tc.err{box-shadow:inset 3px 0 0 var(--danger)}
+details.tc.err .tool{background:var(--danger-soft);color:var(--danger)}
+.io{padding:0 16px 16px}
+.io pre{margin:8px 0 0;padding:14px;border-radius:10px;background:var(--code);font:12.5px/1.6 var(--mono);overflow:auto;max-height:220px;white-space:pre-wrap;word-break:break-word}
+.io label{font-size:12.5px;color:var(--faint);font-weight:600}
+.exec{background:var(--surface);border-radius:var(--r);overflow:hidden;box-shadow:inset 0 3px 0 var(--ok)}
+.exec>summary{list-style:none;display:flex;align-items:center;gap:var(--s3);padding:18px 20px;cursor:pointer}
+.exec>summary::-webkit-details-marker{display:none}
+.exec .et{flex:1;min-width:0} .exec .et b{display:block} .exec .et span{font-size:13px;color:var(--muted)}
+.exec .inner{padding:0 20px 20px;display:flex;flex-direction:column;gap:6px}
+.ring{position:relative;width:52px;height:52px;flex:none}
+.ring svg{transform:rotate(-90deg)} .ring b{position:absolute;inset:0;display:grid;place-items:center;font:600 11px var(--mono)}
+.ask{background:var(--warn-soft);border-radius:var(--r);padding:var(--s4);display:flex;gap:var(--s3)}
+.ask .ic{width:40px;height:40px;border-radius:12px;background:var(--warn);color:#1a1200;display:grid;place-items:center;flex:none}
+.ask .ic svg{width:20px;height:20px}
+.ask h4{font-size:16px;margin-bottom:4px}
+.ask .opts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.perm{background:var(--surface);border-radius:var(--r);padding:var(--s4);box-shadow:inset 0 0 0 1.5px var(--shimmer),0 0 40px rgba(10,132,255,.14)}
+.perm h4{font-size:16px}
+.perm pre{margin:12px 0 16px;padding:14px;border-radius:10px;background:var(--code);font:13px var(--mono)}
+.perm .acts{display:flex;gap:10px;flex-wrap:wrap}
+.perm.done{box-shadow:none;opacity:.7}
+.composer{padding:var(--s3) var(--s4) var(--s4);background:linear-gradient(0deg,var(--bg-0) 70%,transparent)}
+.composer .in{max-width:820px;margin:0 auto;background:var(--surface);border-radius:20px;padding:var(--s3);box-shadow:0 0 0 1px var(--line-2),var(--shadow)}
+.composer textarea{width:100%;border:0;background:transparent;resize:none;min-height:56px;max-height:160px;outline:none;padding:6px 8px;font-size:15px}
+.cbar{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.cbar .sp{flex:1}
+.tchip{display:inline-flex;gap:6px;align-items:center;padding:5px 12px;border-radius:99px;background:var(--surface-3);font-size:13px;font-weight:600;border:0}
+.tchip svg{width:16px;height:16px}
+.tchip:hover{background:var(--accent-soft)}
+.panel{width:320px;flex:none;border-left:1px solid var(--line);overflow:auto;padding:var(--s4);background:var(--bg-1);display:flex;flex-direction:column;gap:var(--s4)}
+.panel.off{display:none}
+.panel h3{font-size:15px;margin-bottom:var(--s2)}
+.track{position:relative;display:flex;flex-direction:column;gap:20px;padding-left:6px}
+.track::before{content:"";position:absolute;left:14px;top:10px;bottom:10px;width:2px;background:linear-gradient(var(--star),var(--line));opacity:.5}
+.tn{position:relative;display:flex;gap:14px;align-items:flex-start;font-size:14px}
+.tn i{flex:none;width:18px;height:18px;display:grid;place-items:center;font-style:normal;font-size:15px;color:var(--star);background:var(--bg-1);z-index:1;line-height:1}
+.tn.cur i{color:var(--shimmer);animation:pl 1.6s infinite;font-size:19px}
+.tn.up i{color:var(--faint)}
+.tn.up{color:var(--faint)}
+.mini{display:flex;flex-direction:column;gap:10px}
+.mc{background:var(--surface);padding:14px 16px;border-radius:12px;border:0;text-align:left;width:100%}
+.mc:hover{background:var(--surface-2)}
+.mc b{font-size:13.5px;display:block;margin:4px 0 2px}
+
+/* board */
+.filters{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-bottom:var(--s4)}
+.field{padding:10px 14px;border-radius:12px;border:1px solid var(--line-2);background:var(--surface);outline:none}
+.field:focus{border-color:var(--shimmer)}
+textarea.field{width:100%;resize:vertical}
+.cols{display:flex;gap:var(--s4);align-items:flex-start;overflow-x:auto;padding-bottom:var(--s4)}
+.col{flex:0 0 292px;background:var(--bg-1);border-radius:var(--r);padding:var(--s3);min-height:200px;transition:background .15s}
+.col.over{background:var(--accent-soft)}
+.col h3{font-size:14px;display:flex;align-items:center;gap:8px;padding:4px 6px 14px;color:var(--muted)}
+.col h3 em{font-style:normal;background:var(--surface-3);padding:0 9px;border-radius:99px;font-size:12px}
+.tk{background:var(--surface);border-radius:12px;padding:16px;margin-bottom:12px;cursor:grab;display:flex;flex-direction:column;gap:12px;transition:transform .12s,box-shadow .15s;text-align:left;width:100%;border:0}
+.tk:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(0,0,0,.25)}
+.tk .r1,.tk .r3{display:flex;align-items:center;gap:8px}
+.tk .key{font:600 12px var(--mono);color:var(--muted)}
+.tk .ti{font-weight:600;line-height:1.4;font-size:15px}
+.tk .sp{flex:1}
+.ty{width:22px;height:22px;border-radius:7px;display:grid;place-items:center}
+.ty svg{width:13px;height:13px}
+.ty.feature{background:var(--accent-soft);color:var(--shimmer)} .ty.bug{background:var(--danger-soft);color:var(--danger)} .ty.chore{background:var(--surface-3);color:var(--muted)}
+.pr{font-size:12px;font-weight:600} .pr.high{color:var(--danger)} .pr.med{color:var(--warn)} .pr.low{color:var(--faint)}
+.bar{height:5px;background:var(--surface-3);border-radius:3px;overflow:hidden;flex:1}
+.bar u{display:block;height:100%;background:var(--grad)}
+.meta{font-size:12.5px;color:var(--faint);display:flex;gap:10px;align-items:center}
+.cid{font:600 11.5px var(--mono);padding:2px 8px;border-radius:6px;background:var(--surface-3);color:var(--star)}
+
+/* overlays */
+.scrim{position:fixed;inset:0;background:rgba(3,6,18,.62);display:none;z-index:50;backdrop-filter:blur(3px)}
+.scrim.on{display:block}
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;background:var(--surface);border-radius:20px;padding:var(--s5);z-index:60;box-shadow:var(--shadow);display:none}
+.modal.on{display:block}
+.modal h2{font-size:21px;margin-bottom:var(--s4)}
+.fr{display:flex;flex-direction:column;gap:6px;margin-bottom:var(--s3)}
+.fr label,.lab{font-size:13px;font-weight:600;color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3)}
+.mfoot{display:flex;gap:var(--s2);justify-content:flex-end;margin-top:var(--s4);flex-wrap:wrap}
+.acl{display:flex;flex-direction:column;gap:8px}
+.acl .row{display:flex;gap:8px;align-items:center}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100vw);background:var(--surface);z-index:60;padding:var(--s5);overflow:auto;box-shadow:var(--shadow);transform:translateX(105%);transition:transform .25s ease}
+.drawer.on{transform:none}
+.drawer h2{font-size:21px;line-height:1.3;margin:var(--s2) 0 var(--s4)}
+.sec{margin-top:var(--s5)} .sec>h4{font-size:14px;color:var(--muted);margin-bottom:var(--s2)}
+.ac{display:flex;gap:12px;align-items:flex-start;padding:8px 0}
+.tick{flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line-2);display:grid;place-items:center;color:transparent;margin-top:2px}
+.tick.y{background:var(--ok);border-color:var(--ok);color:#052}
+.tick svg{width:12px;height:12px}
+.tl{display:flex;flex-direction:column;gap:14px;border-left:2px solid var(--line);padding-left:18px;margin-left:6px}
+.tl div{position:relative;font-size:14px} .tl div::before{content:"";position:absolute;left:-25px;top:7px;width:8px;height:8px;border-radius:50%;background:var(--star)}
+.tl small{display:block;color:var(--faint);font-size:12px}
+.fch{display:flex;gap:10px;align-items:center;padding:8px 0;font-size:13.5px}
+.add{color:var(--ok)} .del{color:var(--danger)}
+.pop{position:fixed;z-index:80;background:var(--surface-3);border-radius:14px;padding:6px;min-width:210px;box-shadow:var(--shadow);display:none}
+.pop.on{display:block}
+.pop button{display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:10px 14px;border:0;background:transparent;border-radius:10px;font-size:14px}
+.pop button:hover,.pop button:focus-visible{background:var(--accent-soft)}
+.pop button.dng{color:var(--danger)}
+.toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);background:var(--surface-3);padding:12px 20px;border-radius:99px;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.25s;z-index:90;font-weight:600;font-size:14px;max-width:calc(100vw - 32px)}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.pal{position:fixed;left:50%;top:14vh;transform:translateX(-50%);width:min(580px,calc(100vw - 32px));background:var(--surface);border-radius:20px;z-index:70;box-shadow:var(--shadow);display:none;overflow:hidden}
+.pal.on{display:block}
+.pal input{width:100%;border:0;border-bottom:1px solid var(--line);background:transparent;padding:20px 24px;font-size:17px;outline:none}
+.pal ul{list-style:none;margin:0;padding:8px;max-height:340px;overflow:auto}
+.pal li button{width:100%;display:flex;gap:12px;align-items:center;padding:12px 16px;border:0;background:transparent;border-radius:10px;text-align:left}
+.pal li button:hover,.pal li button.sel{background:var(--accent-soft)}
+.pal li small{margin-left:auto;color:var(--faint)}
+
+/* cubes */
+.lanes{position:relative;display:flex;gap:72px;width:max-content;min-width:100%;padding-bottom:var(--s4)}
+.lanes svg.deps{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.lane{position:relative;width:360px;display:flex;flex-direction:column;gap:var(--s4)}
+.lane>h3{font-size:15px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.lane>h3 b{color:var(--star)}
+.cube{position:relative;background:var(--surface);border-radius:var(--r);padding:var(--s4);padding-top:calc(var(--s4) + 6px);overflow:hidden;display:flex;flex-direction:column;gap:var(--s3);box-shadow:0 8px 28px rgba(0,0,0,.18);z-index:1}
+.cube::before{content:"";position:absolute;left:0;right:0;top:0;height:6px;background:var(--bc,var(--faint))}
+.cube.proposed{--bc:var(--faint)} .cube.approved{--bc:var(--star)} .cube.running{--bc:var(--cur)} .cube.review{--bc:var(--warn)} .cube.changes{--bc:var(--danger)} .cube.passed,.cube.done{--bc:var(--ok)}
+.cube .h{display:flex;align-items:center;gap:var(--s2)}
+.cube .h .sp{flex:1}
+.cube h4{font-size:17px;line-height:1.35}
+.cube .act{color:var(--muted);font-size:14px}
+.dw{background:var(--surface-2);border-radius:10px;padding:12px 14px;font-size:13.5px}
+.dw b{display:block;font-size:12px;color:var(--faint);margin-bottom:2px}
+.flow{display:flex;flex-direction:column;gap:2px}
+.fn{display:flex;gap:12px;padding:8px 0;position:relative}
+.fn+.fn::before{content:"";position:absolute;left:5px;top:-10px;height:14px;width:2px;background:var(--line-2)}
+.fn i{flex:none;width:12px;height:12px;border-radius:50%;margin-top:6px;background:var(--fc)}
+.fn .l{min-width:0}
+.fn code{font:12.5px var(--mono);word-break:break-all}
+.fn code b{color:var(--fc);font-weight:600}
+.fn .d{font-size:13px;color:var(--muted)}
+.more{border:0;background:transparent;color:var(--shimmer);font-weight:600;font-size:13px;padding:6px 0;text-align:left}
+@media (prefers-color-scheme:light){.more{color:var(--accent)}}
+.life{display:flex;gap:4px;align-items:center}
+.life i{flex:1;height:4px;border-radius:2px;background:var(--surface-3)}
+.life i.on{background:var(--bc)}
+.life i.now{background:var(--bc);box-shadow:0 0 8px var(--bc)}
+.lifelab{display:flex;justify-content:space-between;font-size:11.5px;color:var(--faint);margin-top:4px}
+.rev{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;border-radius:10px;background:var(--surface-2)}
+.sev{font:700 11.5px var(--mono);padding:2px 8px;border-radius:6px}
+.sev.P0{background:var(--danger);color:#2a0606} .sev.P1{background:#FB923C;color:#2a1200} .sev.P2{background:var(--warn);color:#2a1a00} .sev.P3{background:var(--surface-3);color:var(--muted)}
+.sevn{font-size:13px;color:var(--muted)}
+.cact{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+.cact .sp{flex:1}
+.dview .back{margin-bottom:var(--s4)}
+.dgrid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:var(--s4);align-items:start}
+.fgroup{margin-bottom:var(--s4)}
+.fgroup>.gh{font:600 13px var(--mono);margin-bottom:6px;display:flex;align-items:center;gap:8px;color:var(--fc)}
+.fgroup>.gh::before{content:"";width:12px;height:12px;border-radius:4px;background:var(--fc)}
+.thr{display:flex;flex-direction:column;gap:12px;margin-bottom:var(--s3)}
+.bub{padding:12px 16px;border-radius:14px;background:var(--surface-2);font-size:14px;max-width:92%}
+.bub.me{align-self:flex-end;background:var(--accent-soft)}
+
+/* review */
+.tabs{display:flex;gap:6px;margin-bottom:var(--s4);flex-wrap:wrap}
+.tabs button{padding:10px 20px;border:0;border-radius:99px;background:transparent;color:var(--muted);font-weight:600}
+.tabs button:hover{background:var(--surface-2)} .tabs button.on{background:var(--accent-soft);color:var(--text)}
+.rgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s4)}
+.rgrid .card h4{font-size:15px;margin-bottom:8px}
+.rgrid .card p,.rgrid .card li{color:var(--muted);font-size:14.5px}
+.rgrid ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.flowline{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+.fnode{padding:6px 12px;border-radius:99px;background:var(--surface-3);font:12.5px var(--mono)}
+.verdict{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap}
+.vbig{font-weight:750;font-size:18px;padding:8px 18px;border-radius:12px}
+.vbig.rc{background:var(--warn-soft);color:var(--warn)} .vbig.ap{background:var(--ok-soft);color:var(--ok)} .vbig.ni{background:var(--accent-soft);color:var(--shimmer)}
+.finding{background:var(--surface);border-radius:var(--r);padding:var(--s4);margin-bottom:var(--s3);display:flex;flex-direction:column;gap:10px}
+.finding .t{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.finding .t b{font-size:16px}
+.flink{font:13px var(--mono);color:var(--shimmer);background:none;border:0;padding:0;text-decoration:underline;text-underline-offset:3px}
+@media (prefers-color-scheme:light){.flink{color:var(--accent)}}
+.diff{background:var(--code);border-radius:var(--r);overflow:hidden;margin-bottom:var(--s4)}
+.dfh{display:flex;align-items:center;gap:var(--s2);padding:12px 16px;background:var(--surface-2);font:600 13px var(--mono);flex-wrap:wrap}
+.dfh .sp{flex:1}
+.dl{display:grid;grid-template-columns:48px 48px 1fr;font:12.5px/1.65 var(--mono);cursor:pointer}
+.dl:hover{background:rgba(125,211,252,.07)}
+.dl .n{color:var(--faint);text-align:right;padding-right:10px;user-select:none}
+.dl .c{padding:0 12px;white-space:pre-wrap;word-break:break-all}
+.dl.add{background:rgba(94,234,180,.1)} .dl.del{background:rgba(248,113,113,.1)}
+.dl.add .c::before{content:"+ ";color:var(--ok)} .dl.del .c::before{content:"- ";color:var(--danger)} .dl.ctx .c::before{content:"  "}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.split .dl{grid-template-columns:44px 1fr}
+.split>div{min-width:0;overflow:hidden} .split>div+div{border-left:1px solid var(--line)}
+.dscroll{overflow-x:auto}
+.cmt{margin:6px 12px 10px 100px;padding:12px;border-radius:10px;background:var(--surface-3);font:14px var(--sans);display:flex;gap:8px;align-items:flex-start}
+.cmt textarea{flex:1;min-height:44px}
+.tk-s{color:#C084FC} .tk-t{color:#7DD3FC} .tk-c{color:var(--faint);font-style:italic} .tk-n{color:#FBBF24}
+@media (prefers-color-scheme:light){.tk-s{color:#7E22CE}.tk-t{color:#0369A1}.tk-n{color:#B45309}}
+.revbar{display:flex;gap:var(--s2);flex-wrap:wrap;justify-content:flex-end}
+.q{background:var(--surface);border-radius:var(--r);padding:var(--s4);margin-bottom:var(--s4)}
+.q h4{font-size:16px;margin-bottom:var(--s3);line-height:1.45}
+.opt{display:flex;gap:12px;width:100%;text-align:left;padding:14px 16px;border-radius:12px;border:1.5px solid var(--line);background:transparent;margin-bottom:8px}
+.opt:hover:not(:disabled){border-color:var(--star);background:var(--surface-2)}
+.opt.right{border-color:var(--ok);background:var(--ok-soft)} .opt.wrong{border-color:var(--danger);background:var(--danger-soft)}
+.opt b{font-family:var(--mono);color:var(--faint)}
+.why{font-size:14px;color:var(--muted);margin-top:8px;display:none} .why.on{display:block}
+
+/* files */
+.fgrid{display:grid;grid-template-columns:340px minmax(0,1fr);gap:var(--s4);height:calc(100% - 100px);min-height:420px}
+.tree{background:var(--surface);border-radius:var(--r);padding:var(--s3);overflow:auto}
+.tree .fold{font-weight:600;font-size:13px;color:var(--muted);padding:12px 10px 6px;display:flex;gap:8px;align-items:center}
+.fi{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:0;background:transparent;border-radius:10px;text-align:left}
+.fi:hover{background:var(--surface-2)} .fi.on{background:var(--accent-soft)}
+.fi .nm{flex:1;min-width:0;font:13.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fi small{color:var(--faint);font-size:12px}
+.badge{font-size:11px;font-weight:700;padding:1px 8px;border-radius:99px}
+.badge.new{background:var(--ok-soft);color:var(--ok)} .badge.edit{background:var(--accent-soft);color:var(--shimmer)}
+.prev{background:var(--surface);border-radius:var(--r);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.prev .ph2{display:flex;align-items:center;gap:var(--s2);padding:var(--s3) var(--s4);flex-wrap:wrap}
+.prev .ph2 .sp{flex:1}
+.code{flex:1;overflow:auto;background:var(--code);padding:var(--s3) 0;font:13px/1.7 var(--mono)}
+.code div{display:grid;grid-template-columns:56px 1fr}
+.code .n{color:var(--faint);text-align:right;padding-right:14px;user-select:none}
+.code .c{white-space:pre}
+
+/* usage */
+.ugrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--s4)}
+.um{display:flex;gap:var(--s4);align-items:center}
+.um .rg{position:relative;width:132px;height:132px;flex:none}
+.um .rg svg{transform:rotate(-90deg)} .um .rg b{position:absolute;inset:0;display:grid;place-items:center;font-size:28px;letter-spacing:-.02em}
+.um h3{font-size:16px;margin-bottom:6px}
+.um .big{font-size:22px;font-weight:700}
+.hint{margin-top:var(--s4);padding:var(--s3) var(--s4);border-radius:12px;background:var(--accent-soft);font-size:14.5px}
+.stack{display:flex;height:12px;border-radius:6px;overflow:hidden;margin:14px 0 10px;gap:2px}
+.stack i{display:block}
+.leg{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.leg span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c);margin-right:6px}
+
+/* responsive */
+@media (max-width:900px){
+  .panel{display:none}
+  .dgrid,.fgrid{grid-template-columns:1fr} .fgrid{height:auto}
+  .meters{display:none}
+}
+@media (max-width:760px){
+  .app{grid-template-columns:1fr;grid-template-rows:1fr auto}
+  .main{order:1} .rail{order:2;flex-direction:row;padding:6px;border-right:0;border-top:1px solid var(--line);justify-content:space-around;gap:0}
+  .logo{display:none}
+  .navb{flex:1;padding:8px 2px;font-size:11px;border-radius:12px} .navb svg{width:20px;height:20px}
+  .navb .dotc{margin-left:14px}
+  .screen{padding:var(--s3)}
+  .top{padding:var(--s2) var(--s3);gap:var(--s2)}
+  .sess span,.hidem{display:none}
+  .two{grid-template-columns:1fr}
+  .modal{padding:var(--s4)}
+  .ub{max-width:92%}
+  .cols{margin-right:calc(var(--s3) * -1)}
+  .col{flex-basis:262px}
+  .ph h1{font-size:22px}
+  .um{flex-direction:column;align-items:flex-start}
+  .tree{max-height:240px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Main">
+    <div class="logo"><b>&#10022;</b></div>
+    <button class="navb on" data-act="nav" data-arg="session"><span data-ic="chat"></span>Session</button>
+    <button class="navb" data-act="nav" data-arg="board"><span data-ic="board"></span>Board</button>
+    <button class="navb" data-act="nav" data-arg="cubes"><span data-ic="cube"></span>Cubes</button>
+    <button class="navb" data-act="nav" data-arg="review"><span data-ic="shield"></span>Review<span class="dotc">3</span></button>
+    <button class="navb" data-act="nav" data-arg="files"><span data-ic="file"></span>Files</button>
+    <button class="navb" data-act="nav" data-arg="usage"><span data-ic="gauge"></span>Usage</button>
+  </nav>
+  <div class="main">
+    <header class="top">
+      <div class="sess"><b>Build dashboard v2</b><span class="mono">C:\Users\nimis\.claude\local-plugins\task-progress</span></div>
+      <span class="chip blue hidem">Opus 5</span>
+      <span class="chip warn" id="status"><i class="pulse"></i>Working</span>
+      <div class="meters">
+        <div class="mm">Context 38%<i><u style="width:38%"></u></i></div>
+        <div class="mm">5h 41%<i><u style="width:41%"></u></i></div>
+        <div class="mm hot">Week 62%<i><u style="width:62%"></u></i></div>
+      </div>
+      <button class="btn sm danger" data-act="stop">Stop</button>
+      <button class="btn sm hidem" data-act="palette"><span data-ic="search"></span>Search <kbd>Ctrl K</kbd></button>
+      <button class="btn pri" data-act="newTicket"><span data-ic="plus"></span>New ticket <kbd style="background:rgba(0,0,0,.25);color:#fff">N</kbd></button>
+    </header>
+    <div class="screens">
+
+      <!-- SESSION -->
+      <section class="screen on" id="s-session">
+        <div class="chatcol">
+          <div class="thread" id="thread"><div class="in" id="chat"></div></div>
+          <div class="composer"><div class="in">
+            <textarea id="msg" placeholder="Tell Claude what to do next. Ctrl+Enter to send." aria-label="Message"></textarea>
+            <div class="cbar">
+              <button class="tchip" data-act="attach"><span data-ic="ticket"></span><span id="attlab">Attach ticket</span></button>
+              <span class="chip warn" id="qbadge" style="display:none">queued: runs when Claude is idle</span>
+              <span class="sp"></span>
+              <button class="btn ghost sm" data-act="togglePanel"><span data-ic="panel"></span>Plan panel</button>
+              <button class="btn pri" data-act="send">Send <kbd style="background:rgba(0,0,0,.25);color:#fff">Ctrl Enter</kbd></button>
+            </div>
+          </div></div>
+        </div>
+        <aside class="panel" id="panel">
+          <div><h3>Plan progress</h3>
+            <div class="track">
+              <div class="tn"><i>&#10022;</i>Event bridge from hooks</div>
+              <div class="tn"><i>&#10022;</i>Live transcript mirror</div>
+              <div class="tn cur"><i>&#10022;</i><span><b>Prompt submit relay</b><br><span class="muted" style="font-size:13px">running, 3 of 6 steps</span></span></div>
+              <div class="tn up"><i>&#10022;</i>Board and tickets API</div>
+              <div class="tn up"><i>&#10022;</i>Permission relay</div>
+              <div class="tn up"><i>&#10022;</i>Review runner</div>
+            </div>
+          </div>
+          <div><h3>Active cubes</h3>
+            <div class="mini">
+              <button class="mc" data-act="cubeOpen" data-arg="c3"><span class="chip blue">running</span><b>Prompt submit relay</b><span class="muted" style="font-size:13px">Send web prompts into the terminal</span></button>
+              <button class="mc" data-act="cubeOpen" data-arg="c4"><span class="chip warn">in review</span><b>Board and tickets API</b><span class="muted" style="font-size:13px">PR review found 1 P1</span></button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <!-- BOARD -->
+      <section class="screen" id="s-board">
+        <div class="ph"><div><h1>Board</h1><p>Every ticket you hand to Claude. Drag a card to change its stage.</p></div><span class="sp"></span>
+          <button class="btn pri" data-act="newTicket"><span data-ic="plus"></span>New ticket</button></div>
+        <div class="filters">
+          <input class="field" id="fq" placeholder="Search tickets" aria-label="Search tickets" style="min-width:220px">
+          <select class="field" id="fa" aria-label="Assignee"><option value="">Anyone</option><option value="claude">Claude</option><option value="you">You</option><option value="exec">Executor</option></select>
+          <select class="field" id="fp" aria-label="Priority"><option value="">Any priority</option><option>high</option><option>med</option><option>low</option></select>
+          <select class="field" id="ft" aria-label="Type"><option value="">Any type</option><option>feature</option><option>bug</option><option>chore</option></select>
+        </div>
+        <div class="cols" id="cols"></div>
+      </section>
+
+      <!-- CUBES -->
+      <section class="screen" id="s-cubes">
+        <div id="cubes-list">
+          <div class="ph"><div><h1>Cubes</h1><p>Small steps Claude proposes. Approve one and it runs; a PR review checks it before it counts as done.</p></div><span class="sp"></span>
+            <button class="btn" data-act="approveAll">Approve all proposed</button></div>
+          <div style="overflow-x:auto;padding-bottom:8px"><div class="lanes" id="lanes"></div></div>
+        </div>
+        <div class="dview" id="cube-detail" style="display:none"></div>
+      </section>
+
+      <!-- REVIEW -->
+      <section class="screen" id="s-review">
+        <div class="ph"><div><h1>Review</h1><p>An architecture-aware review: first it explains the change, then it judges it, then it quizzes you.</p></div><span class="sp"></span>
+          <select class="field" id="rscope" aria-label="Scope"><option>Cube c4: Board and tickets API</option><option>Ticket TP-12: Live ticket board</option><option>Whole branch: feature/dashboard-v2</option></select>
+          <button class="btn pri" data-act="runReview"><span data-ic="shield"></span><span id="rrlab">Run PR review</span></button></div>
+        <div class="verdict" style="margin-bottom:var(--s4)">
+          <span class="vbig rc" id="vbig">REQUEST CHANGES</span>
+          <span class="sev P1">P1</span><span class="sevn">1 finding</span><span class="sev P2">P2</span><span class="sevn">2</span><span class="sev P3">P3</span><span class="sevn">1</span>
+          <span class="chip ok">Build passed</span><span class="chip ok">41 tests passed</span><span class="chip warn">1 flaky test</span>
+        </div>
+        <div class="tabs" role="tablist" id="rtabs">
+          <button class="on" data-act="rtab" data-arg="u">Understanding</button><button data-act="rtab" data-arg="f">Findings</button><button data-act="rtab" data-arg="d">Diff</button><button data-act="rtab" data-arg="q">Quiz</button>
+        </div>
+        <div id="rbody"></div>
+      </section>
+
+      <!-- FILES -->
+      <section class="screen" id="s-files">
+        <div class="ph"><div><h1>Files</h1><p>Everything Claude created or changed in this session.</p></div></div>
+        <div class="fgrid"><div class="tree" id="tree"></div><div class="prev" id="prev"></div></div>
+      </section>
+
+      <!-- USAGE -->
+      <section class="screen" id="s-usage">
+        <div class="ph"><div><h1>Usage</h1><p>How much room you have left, in plain terms.</p></div></div>
+        <div class="ugrid" id="ugrid"></div>
+        <div class="hint">You have used 62% of this week. It resets Monday at 09:00, in 3 days 4 hours. At today's pace you will finish the week at about 88%.</div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" data-act="closeAll"></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="New ticket">
+  <h2>New ticket</h2>
+  <div class="fr"><label for="nt-title">Title</label><input class="field" id="nt-title" placeholder="What should be built or fixed?"></div>
+  <div class="two">
+    <div class="fr"><label for="nt-type">Type</label><select class="field" id="nt-type"><option>feature</option><option>bug</option><option>chore</option></select></div>
+    <div class="fr"><label for="nt-pr">Priority</label><select class="field" id="nt-pr"><option>med</option><option>high</option><option>low</option></select></div>
+  </div>
+  <div class="fr"><label for="nt-desc">Description</label><textarea class="field" id="nt-desc" rows="3" placeholder="Give Claude the background"></textarea></div>
+  <div class="fr"><span class="lab">Acceptance criteria</span><div class="acl" id="acl"></div><button class="btn ghost sm" style="align-self:flex-start" data-act="addAc">+ Add a check</button></div>
+  <div class="two">
+    <div class="fr"><label for="nt-files">Files or areas</label><input class="field" id="nt-files" placeholder="web/server.js, hooks/"></div>
+    <div class="fr"><label for="nt-as">Assignee</label><select class="field" id="nt-as"><option value="claude">Claude</option><option value="you">You</option></select></div>
+  </div>
+  <div class="mfoot"><button class="btn ghost" data-act="closeAll">Cancel</button><button class="btn" data-act="createTicket" data-arg="plain">Create ticket</button><button class="btn pri" data-act="createTicket" data-arg="claude"><span data-ic="spark"></span>Create and assign to Claude</button></div>
+</div>
+<aside class="drawer" id="drawer" aria-label="Ticket detail"></aside>
+<div class="pal" id="pal" role="dialog" aria-label="Command palette"><input id="palq" placeholder="Type a command or search tickets, cubes, files" aria-label="Command"><ul id="pall"></ul></div>
+<div class="pop" id="pop"></div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+/* ---------- icons ---------- */
+var P={chat:'<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',board:'<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="13" rx="1.5"/>',cube:'<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',shield:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5L16 9.5"/>',file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',gauge:'<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-6"/>',plus:'<path d="M12 5v14M5 12h14"/>',search:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',ticket:'<path d="M4 8a2 2 0 0 0 0 4v0a2 2 0 0 1 0 4v2h16v-2a2 2 0 0 1 0-4V8a2 2 0 0 1 0-4H4z" transform="translate(0 1)"/>',panel:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',spark:'<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>',chev:'<path d="M9 6l6 6-6 6"/>',feature:'<path d="M12 3l2.2 6.3L21 12l-6.8 2.7L12 21l-2.2-6.3L3 12l6.8-2.7z"/>',bug:'<circle cx="12" cy="13" r="5"/><path d="M12 8V4M7 13H3M21 13h-4M8 17l-3 3M16 17l3 3M8 9L5 6M16 9l3-3"/>',chore:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',ext:'<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',dots:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',warn:'<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>'};
+function ic(n,s){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '+(s?'width="'+s+'" height="'+s+'"':'')+'>'+P[n]+'</svg>'}
+function hydrate(root){(root||document).querySelectorAll('[data-ic]').forEach(function(e){if(!e.firstChild)e.innerHTML=ic(e.dataset.ic);e.style.display='inline-flex'})}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function $(s,r){return (r||document).querySelector(s)}
+var FC=['#7DD3FC','#C4B5FD','#5EEAB4','#FBBF24','#F9A8D4','#FB923C'];
+var fileColors={};function fcol(f){if(!fileColors[f])fileColors[f]=FC[Object.keys(fileColors).length%FC.length];return fileColors[f]}
+
+/* ---------- data ---------- */
+var STATES=['proposed','approved','running','in review','passed','done'];
+var SLAB={proposed:'Proposed',approved:'Approved',running:'Running',review:'In review',changes:'Changes requested',passed:'Review passed',done:'Done'};
+var CUBES=[
+{id:'c1',lane:0,title:'Event bridge from hooks',action:'Hooks write every prompt, tool call and stop into one local event log.',min:6,st:'done',dw:'tail of events.jsonl shows a line for each hook within 1 second',after:[],flow:[
+ {f:'hooks/register.tsx',fn:'onToolUse()',does:'Catches each tool call as it happens',calls:'hooks/events.tsx'},{f:'hooks/events.tsx',fn:'append()',does:'Writes one JSON line to the event log',calls:''}]},
+{id:'c2',lane:0,title:'Live transcript mirror',action:'Stream the conversation into the web page as it grows.',min:8,st:'done',dw:'a new Claude reply shows in the browser in under 2 seconds',after:[],flow:[
+ {f:'web/server.js',fn:'watchTranscript()',does:'Watches the session file for new lines',calls:'web/parse.js'},{f:'web/parse.js',fn:'toBubbles()',does:'Turns raw lines into chat bubbles and tool cards',calls:'web/server.js'},{f:'web/server.js',fn:'pushSse()',does:'Sends each bubble to open browsers',calls:''}]},
+{id:'c3',lane:1,title:'Prompt submit relay',action:'Send a message typed in the web composer into the running terminal session.',min:10,st:'running',dw:'a prompt typed in the browser appears in the terminal and Claude answers it',after:['c1','c2'],flow:[
+ {f:'hooks/register.tsx',fn:'onPromptSubmit()',does:'Catches the prompt before Claude sees it',calls:'hooks/dashboard.tsx'},
+ {f:'hooks/dashboard.tsx',fn:'onPromptSubmit()',does:'Posts the prompt to the local bridge',calls:'web/server.js'},
+ {f:'web/server.js',fn:'handlePrompt()',does:'Queues it, and marks it queued if Claude is busy',calls:'web/queue.js'},
+ {f:'web/queue.js',fn:'enqueue()',does:'Stores the prompt in order',calls:''},
+ {f:'web/queue.js',fn:'drainWhenIdle()',does:'Waits until Claude stops, then releases the next prompt',calls:'hooks/stop.tsx'},
+ {f:'hooks/stop.tsx',fn:'onStop()',does:'Marks Claude idle and triggers the drain',calls:''}]},
+{id:'c4',lane:1,title:'Board and tickets API',action:'Create, move and assign tickets; store them next to the session.',min:9,st:'review',dw:'a ticket created in the page survives a server restart',after:['c1'],flow:[
+ {f:'web/server.js',fn:'POST /api/tickets',does:'Validates and saves a new ticket',calls:'web/tickets.js'},{f:'web/tickets.js',fn:'save()',does:'Writes tickets.json atomically',calls:''},{f:'web/tickets.js',fn:'move()',does:'Changes a ticket stage and logs it',calls:''}],
+ rev:{verdict:'REQUEST CHANGES',p:[0,1,2,1]}},
+{id:'c5',lane:2,title:'Permission relay',action:'Show Claude\'s permission questions in the page and answer them from there.',min:8,st:'approved',dw:'clicking Allow once lets the paused tool call continue',after:['c3'],flow:[
+ {f:'hooks/permission.tsx',fn:'onPermissionRequest()',does:'Holds the tool call and asks the bridge',calls:'web/server.js'},{f:'web/server.js',fn:'awaitDecision()',does:'Waits for a click in the browser',calls:'hooks/permission.tsx'}]},
+{id:'c6',lane:2,title:'Review runner',action:'Run the pr-reviewer skill on a cube, ticket or branch and show the report.',min:10,st:'proposed',dw:'Run PR review returns understanding, findings and quiz for c4',after:['c4'],flow:[
+ {f:'web/server.js',fn:'POST /api/review',does:'Starts a review job for the chosen scope',calls:'web/review.js'},{f:'web/review.js',fn:'runSkill()',does:'Calls the pr-reviewer skill in a side session',calls:'web/review.js'},{f:'web/review.js',fn:'parseReport()',does:'Splits the report into tabs',calls:''},{f:'web/server.js',fn:'pushSse()',does:'Sends the finished report to the page',calls:''}]},
+{id:'c7',lane:2,title:'Files and Open in',action:'List changed files and open them in the editor you pick.',min:7,st:'proposed',dw:'Open in VS Code launches the file at the right line',after:['c2'],flow:[
+ {f:'web/files.js',fn:'listChanged()',does:'Collects files Claude touched this session',calls:''},{f:'web/server.js',fn:'POST /api/open',does:'Runs the editor command for a path',calls:''}]}
+];
+var LANES=['Plumbing','Control','Screens'];
+var TICKETS=[
+{key:'TP-9',type:'feature',title:'Show the whole conversation in the browser',prio:'high',as:'claude',st:'done',cubes:['c2'],files:4,pr:[4,4],desc:'Mirror the terminal chat, including tool calls, so the page is the main place to work.',ac:[['Chat shows user and Claude messages',1],['Tool calls fold open',1],['Executor runs are grouped',1]],act:['Claude finished c2','You approved c2'],ch:[['web/parse.js',88,12],['web/server.js',41,9]]},
+{key:'TP-10',type:'chore',title:'Move the styles into one night-sky token file',prio:'low',as:'you',st:'backlog',cubes:[],files:2,pr:[0,1],desc:'Colours and spacing live in one place.',ac:[['One tokens file',0],['No hard-coded hex left',0]],act:['You created this ticket'],ch:[]},
+{key:'TP-11',type:'bug',title:'Context meter shows 0% after a resume',prio:'med',as:'claude',st:'todo',cubes:[],files:1,pr:[0,3],desc:'After resuming a session the context meter starts at zero instead of the real value.',ac:[['Meter matches the terminal after resume',0]],act:['Claude read statusline.js'],ch:[]},
+{key:'TP-12',type:'feature',title:'Live ticket board',prio:'high',as:'claude',st:'review',cubes:['c4'],files:5,pr:[3,4],desc:'A Jira-like board where tickets are assigned to Claude and move on their own as work completes.',ac:[['Create a ticket from the page',1],['Drag a ticket between stages',1],['Survives a server restart',1],['Ticket links to its cubes',0]],act:['Claude opened a PR review','Claude finished c4','You assigned this to Claude'],ch:[['web/tickets.js',112,0],['web/server.js',38,6],['web/board.js',64,3]]},
+{key:'TP-13',type:'feature',title:'Send prompts from the page into the terminal',prio:'high',as:'exec',st:'progress',cubes:['c3'],files:6,pr:[3,6],desc:'Typing in the composer should run in the terminal session, queued if Claude is busy.',ac:[['Prompt reaches the terminal',1],['Queued state is visible',1],['Ctrl+Enter sends',0]],act:['Executor started c3','Claude proposed c3'],ch:[['hooks/dashboard.tsx',54,2],['web/queue.js',71,0]]},
+{key:'TP-14',type:'feature',title:'Answer permission questions in the page',prio:'med',as:'claude',st:'todo',cubes:['c5'],files:3,pr:[0,2],desc:'Allow once, always allow or deny, without switching to the terminal.',ac:[['Card appears when Claude asks',0],['Choice reaches the terminal',0]],act:['You approved c5'],ch:[]},
+{key:'TP-15',type:'feature',title:'PR review inside the page',prio:'med',as:'claude',st:'backlog',cubes:['c6'],files:4,pr:[0,3],desc:'Run the pr-reviewer skill and read the report, diff and quiz in the page.',ac:[['Report in four tabs',0],['Send a fix back to Claude',0]],act:['Claude proposed c6'],ch:[]},
+{key:'TP-16',type:'bug',title:'Stop button does not clear a queued prompt',prio:'high',as:'you',st:'backlog',cubes:[],files:1,pr:[0,1],desc:'Stopping Claude leaves queued messages behind.',ac:[['Stop clears the queue',0]],act:['You created this ticket'],ch:[]},
+{key:'TP-17',type:'chore',title:'Usage page wording pass',prio:'low',as:'exec',st:'done',cubes:[],files:1,pr:[2,2],desc:'Plain language for every meter.',ac:[['No jargon',1],['Reset time shown',1]],act:['Executor finished'],ch:[['web/usage.js',20,14]]}
+];
+var BCOLS=[['backlog','Backlog'],['todo','To do'],['progress','In progress'],['review','In review'],['done','Done']];
+var FILES=[
+ {p:'hooks/register.tsx',st:'edit',t:'2 min ago',code:'import { onToolUse } from "./events"\nimport { onPromptSubmit } from "./dashboard"\n\nexport default function register(api) {\n  api.hook("PromptSubmit", onPromptSubmit)\n  api.hook("ToolUse", onToolUse)\n  api.hook("Stop", onStop)\n}\n'},
+ {p:'hooks/dashboard.tsx',st:'new',t:'6 min ago',code:'const BRIDGE = "http://localhost:4577"\n\nexport async function onPromptSubmit(prompt) {\n  // web prompts are tagged so we do not echo them twice\n  const res = await fetch(BRIDGE + "/api/prompt", {\n    method: "POST",\n    body: JSON.stringify({ prompt }),\n  })\n  return res.ok\n}\n'},
+ {p:'hooks/stop.tsx',st:'new',t:'9 min ago',code:'export function onStop() {\n  fetch(BRIDGE + "/api/idle", { method: "POST" })\n}\n'},
+ {p:'web/server.js',st:'edit',t:'1 min ago',code:'app.post("/api/prompt", (req, res) => {\n  const item = queue.enqueue(req.body.prompt)\n  res.json({ queued: busy, id: item.id })\n})\n\napp.post("/api/idle", () => {\n  busy = false\n  queue.drainWhenIdle()\n})\n'},
+ {p:'web/queue.js',st:'new',t:'4 min ago',code:'const q = []\n\nexport function enqueue(text) {\n  const item = { id: Date.now(), text }\n  q.push(item)\n  return item\n}\n\nexport function drainWhenIdle() {\n  const next = q.shift()\n  if (next) inject(next.text)\n}\n'},
+ {p:'web/tickets.js',st:'new',t:'12 min ago',code:'import fs from "fs"\n\nexport function save(list) {\n  const tmp = FILE + ".tmp"\n  fs.writeFileSync(tmp, JSON.stringify(list, null, 2))\n  fs.renameSync(tmp, FILE)\n}\n'},
+ {p:'docs/mockup/index.html',st:'new',t:'just now',code:'<!doctype html>\n<title>Task Progress v2 - mockup</title>\n<!-- this very file -->\n'}
+];
+var DIFF=[
+ {f:'web/queue.js',L:[[' ',1,1,'const q = []'],[' ',2,2,''],['-',3,'','export function enqueue(text) {'],['-',4,'','  q.push(text)'],['+','',3,'export function enqueue(text) {'],['+','',4,'  const item = { id: Date.now(), text }'],['+','',5,'  q.push(item)'],['+','',6,'  return item'],[' ',5,7,'}'],[' ',6,8,''],[' ',7,9,'export function drainWhenIdle() {'],['-',8,'','  inject(q.shift())'],['+','',10,'  const next = q.shift()'],['+','',11,'  if (next) inject(next.text)'],[' ',9,12,'}']]},
+ {f:'web/tickets.js',L:[[' ',10,10,'export function save(list) {'],['-',11,'','  fs.writeFileSync(FILE, JSON.stringify(list))'],['+','',11,'  const tmp = FILE + ".tmp"'],['+','',12,'  fs.writeFileSync(tmp, JSON.stringify(list, null, 2))'],['+','',13,'  fs.renameSync(tmp, FILE)'],[' ',12,14,'}']]}
+];
+var FINDINGS=[
+ {sev:'P1',t:'Ticket file is overwritten by two writers at once',f:'web/tickets.js',l:12,why:'move() and save() both read the whole list, change it and write it back. Two quick drags can lose one change. Verified by running two moves in parallel: one was dropped.',fix:'Serialise writes through one queue.'},
+ {sev:'P2',t:'Empty prompt is queued',f:'web/queue.js',l:5,why:'enqueue() accepts an empty string, so Claude gets a blank message.',fix:'Reject empty text.'},
+ {sev:'P2',t:'No error shown when the bridge is down',f:'hooks/dashboard.tsx',l:6,why:'fetch failure is swallowed; the page shows Sent even if nothing arrived.',fix:'Return the error to the page.'},
+ {sev:'P3',t:'Magic port number repeated',f:'hooks/dashboard.tsx',l:1,why:'4577 appears in three files.',fix:'Read it from one constant.'}
+];
+var QUIZ=[
+ {q:'A prompt is typed in the page while Claude is working. What happens to it?',o:['It is sent straight into the terminal','It is queued and released when the Stop hook fires','It is dropped','It waits for you to press Enter in the terminal'],a:1,w:'enqueue() stores it and drainWhenIdle() runs on onStop().'},
+ {q:'Which file turns raw transcript lines into chat bubbles?',o:['web/queue.js','hooks/stop.tsx','web/parse.js','web/tickets.js'],a:2,w:'toBubbles() in web/parse.js.'},
+ {q:'Why does save() now write to a temporary file first?',o:['To make saves faster','So a crash mid-write cannot leave a half-written tickets.json','To keep two copies forever','Because Windows needs it'],a:1,w:'The rename is atomic, so the file is always complete.'}
+];
+var USAGE_TURNS=[3,5,4,9,6,12,8,5,14,10,7,16,11,9,18,13,8,6,12,15];
+
+/* ---------- ring helper ---------- */
+function ring(p,col,sz,sw){sz=sz||132;sw=sw||12;var r=(sz-sw)/2,c=2*Math.PI*r;return '<svg width="'+sz+'" height="'+sz+'"><circle cx="'+sz/2+'" cy="'+sz/2+'" r="'+r+'" fill="none" stroke="var(--surface-3)" stroke-width="'+sw+'"/><circle cx="'+sz/2+'" cy="'+sz/2+'" r="'+r+'" fill="none" stroke="'+col+'" stroke-width="'+sw+'" stroke-linecap="round" stroke-dasharray="'+(c*p/100)+' '+c+'"/></svg>'}
+
+/* ---------- toast, pop ---------- */
+var tt;function toast(m){var t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(function(){t.classList.remove('on')},2400)}
+function showPop(btn,items){var p=$('#pop');p.innerHTML=items.map(function(i){return '<button class="'+(i.d?'dng':'')+'" data-act="popPick" data-arg="'+esc(i.l)+'">'+(i.i?ic(i.i,16):'')+esc(i.l)+'</button>'}).join('');var r=btn.getBoundingClientRect();p.classList.add('on');var w=p.offsetWidth,h=p.offsetHeight;p.style.left=Math.max(8,Math.min(innerWidth-w-8,r.right-w))+'px';p.style.top=(r.bottom+h+8>innerHeight?r.top-h-6:r.bottom+6)+'px';var f=p.querySelector('button');if(f)f.focus()}
+function hidePop(){$('#pop').classList.remove('on')}
+function openIn(btn,path){btn.dataset.path=path;showPop(btn,[{l:'Open in VS Code',i:'ext'},{l:'Open in Android Studio',i:'ext'},{l:'View here',i:'file'}]);$('#pop').dataset.path=path}
+function openInBtn(path){return '<button class="btn sm" data-act="openIn" data-arg="'+esc(path)+'">Open in <span style="opacity:.7">&#9662;</span></button>'}
+
+/* ---------- SESSION ---------- */
+var chatEl=$('#chat');
+function ring2(secs,total){var p=secs/total*100;return '<span class="ring">'+ring(p,'var(--ok)',52,5)+'<b class="cd" data-s="'+secs+'">'+fmt(secs)+'</b></span>'}
+function fmt(s){return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function tool(name,sum,inp,out,err){return '<details class="tc'+(err?' err':'')+'"><summary><span class="tool">'+name+'</span><span class="sum">'+esc(sum)+'</span><span class="chev">'+ic('chev',16)+'</span></summary><div class="io"><label>Input</label><pre>'+esc(inp)+'</pre><label style="display:block;margin-top:12px">'+(err?'Error':'Output')+'</label><pre>'+esc(out)+'</pre></div></details>'}
+function claude(h){return '<div class="cm"><div class="av c">&#10022;</div><div class="body">'+h+'</div></div>'}
+chatEl.innerHTML=
+ '<div class="ub">Make the dashboard the main place I work. Start with sending prompts from the page into the terminal.<span class="qb">Ticket TP-13</span></div>'+
+ claude('<p>Good plan. I will split it into <b>six cubes</b>, and the first two are already done. Here is what I am doing now:</p><ul><li>Catch the prompt in <code>hooks/register.tsx</code></li><li>Queue it in the bridge if I am busy</li><li>Release it when the <code>Stop</code> hook fires</li></ul>')+
+ '<div class="cm"><div class="av c" style="visibility:hidden"></div><div class="body">'+
+ tool('Read','web/server.js (lines 1-120)','{ "file_path": "web/server.js", "limit": 120 }','const express = require("express")\nconst app = express()\n... 120 lines')+
+ tool('Grep','onPromptSubmit in hooks/','{ "pattern": "onPromptSubmit", "path": "hooks" }','hooks/register.tsx:18\nhooks/dashboard.tsx:4')+
+ tool('Bash','npm test (failed, 2 tests)','{ "command": "npm test" }','FAIL web/queue.test.js\n  x enqueue keeps order (14 ms)\n    Expected: [1,2]\n    Received: [2,1]\n\nTests: 2 failed, 39 passed',true)+
+ '</div></div>'+
+ claude('<p>Two tests fail because <code>enqueue()</code> pushed to the front. I handed the fix to an executor so I can keep planning.</p>')+
+ '<div class="cm"><div class="av e">&#10022;</div><div class="body"><details class="exec" open><summary>'+ring2(252,420)+'<div class="et"><b>Executor, cube c3: Prompt submit relay</b><span>Sonnet, step 3 of 6, budget 7:00</span></div><span class="chip blue"><i class="pulse"></i>Running</span></summary><div class="inner">'+
+ tool('Edit','web/queue.js, 6 lines changed','{ "file_path": "web/queue.js" }','Edited successfully')+
+ tool('Bash','node --test web/queue.test.js','{ "command": "node --test web/queue.test.js" }','tests 3, pass 3')+
+ tool('Write','hooks/stop.tsx, new file','{ "file_path": "hooks/stop.tsx" }','Created')+
+ '</div></details></div></div>'+
+ '<div class="perm" id="permcard"><h4>Claude wants to run Bash</h4><p class="muted" style="font-size:14px;margin-top:2px">The tool call is paused until you decide.</p><pre>npm test</pre><div class="acts"><button class="btn pri" data-act="perm" data-arg="Allowed once">Allow once</button><button class="btn" data-act="perm" data-arg="Always allowed">Always allow</button><button class="btn danger" data-act="perm" data-arg="Denied">Deny</button></div></div>'+
+ '<div class="ask"><div class="ic">'+ic('warn')+'</div><div><h4>Waiting in the terminal</h4><p class="muted" style="font-size:14.5px">Claude asked you a question with several choices: <b>Which editor should "Open in" launch by default?</b> This kind of question can only be answered in the terminal window. Switch to it, pick an answer, and this page will carry on by itself.</p><div class="opts"><span class="chip">VS Code</span><span class="chip">Android Studio</span><span class="chip">Ask every time</span></div></div></div>'+
+ claude('<p>While that runs, I am wiring the permission card so it can answer from here<span class="caret"></span></p>');
+function bubbleUser(t,queued){var d=document.createElement('div');d.className='ub';d.innerHTML=esc(t)+(queued?'<br><span class="qb">queued: runs when Claude is idle</span>':'');chatEl.appendChild(d);scrollChat();return d}
+function scrollChat(){var t=$('#thread');t.scrollTop=t.scrollHeight}
+var cdT=setInterval(function(){document.querySelectorAll('.cd').forEach(function(e){var s=Math.max(0,+e.dataset.s-1);e.dataset.s=s;e.textContent=fmt(s)})},1000);
+
+/* ---------- BOARD ---------- */
+var drag=null;
+function tk(t){var pr=t.pr;var av={claude:['c','&#10022;'],you:['y','Y'],exec:['e','E']}[t.as];
+ return '<div class="tk" draggable="true" tabindex="0" role="button" data-act="openTicket" data-arg="'+t.key+'" data-key="'+t.key+'"><div class="r1"><span class="ty '+t.type+'" title="'+t.type+'">'+ic(t.type)+'</span><span class="key">'+t.key+'</span><span class="sp"></span><span class="pr '+t.prio+'">'+{high:'High',med:'Medium',low:'Low'}[t.prio]+'</span></div><div class="ti">'+esc(t.title)+'</div><div class="r3"><div class="bar"><u style="width:'+(pr[1]?pr[0]/pr[1]*100:0)+'%"></u></div><span class="meta">'+pr[0]+'/'+pr[1]+'</span></div><div class="r3"><span class="av '+av[0]+'" style="width:26px;height:26px;font-size:12px" title="'+t.as+'">'+av[1]+'</span>'+t.cubes.map(function(c){return '<span class="cid">'+c+'</span>'}).join('')+'<span class="sp"></span><span class="meta">'+ic('file',14)+t.files+'</span></div></div>'}
+function renderBoard(){var q=$('#fq').value.toLowerCase(),a=$('#fa').value,p=$('#fp').value,ty=$('#ft').value;
+ var list=TICKETS.filter(function(t){return (!q||(t.title+t.key).toLowerCase().indexOf(q)>-1)&&(!a||t.as===a)&&(!p||t.prio===p)&&(!ty||t.type===ty)});
+ $('#cols').innerHTML=BCOLS.map(function(c){var l=list.filter(function(t){return t.st===c[0]});return '<div class="col" data-col="'+c[0]+'"><h3>'+c[1]+'<em>'+l.length+'</em></h3>'+l.map(tk).join('')+'</div>'}).join('');}
+['fq','fa','fp','ft'].forEach(function(i){$('#'+i).addEventListener('input',renderBoard)});
+document.addEventListener('dragstart',function(e){var c=e.target.closest&&e.target.closest('.tk');if(c){drag=c.dataset.key;try{e.dataTransfer.setData('text/plain',drag)}catch(_){}}});
+document.addEventListener('dragover',function(e){var c=e.target.closest&&e.target.closest('.col');if(c&&drag){e.preventDefault();document.querySelectorAll('.col.over').forEach(function(x){x.classList.remove('over')});c.classList.add('over')}});
+document.addEventListener('drop',function(e){var c=e.target.closest&&e.target.closest('.col');if(c&&drag){e.preventDefault();moveTicket(drag,c.dataset.col);drag=null}});
+document.addEventListener('dragend',function(){drag=null;document.querySelectorAll('.col.over').forEach(function(x){x.classList.remove('over')})});
+function moveTicket(k,st){var t=TICKETS.find(function(x){return x.key===k});if(!t||t.st===st)return;t.st=st;t.act.unshift('You moved this to '+BCOLS.find(function(c){return c[0]===st})[1]);renderBoard();toast(k+' moved to '+BCOLS.find(function(c){return c[0]===st})[1])}
+var openKey=null;
+function openTicket(k){openKey=k;var t=TICKETS.find(function(x){return x.key===k});
+ $('#drawer').innerHTML='<div style="display:flex;align-items:center;gap:10px"><span class="ty '+t.type+'">'+ic(t.type)+'</span><span class="key mono muted">'+t.key+'</span><span class="pr '+t.prio+'" style="margin-left:auto">'+{high:'High',med:'Medium',low:'Low'}[t.prio]+' priority</span><button class="btn ghost sm" data-act="closeAll" aria-label="Close">Close</button></div><h2>'+esc(t.title)+'</h2>'+
+ '<div class="two"><div class="fr"><label for="dst">Status</label><select class="field" id="dst" data-chg="status">'+BCOLS.map(function(c){return '<option value="'+c[0]+'"'+(c[0]===t.st?' selected':'')+'>'+c[1]+'</option>'}).join('')+'</select></div><div class="fr"><label>Assignee</label><div class="field" style="display:flex;gap:8px;align-items:center"><span class="av '+({claude:'c',you:'y',exec:'e'}[t.as])+'" style="width:24px;height:24px;font-size:11px">'+({claude:'&#10022;',you:'Y',exec:'E'}[t.as])+'</span>'+({claude:'Claude',you:'You',exec:'Executor'}[t.as])+'</div></div></div>'+
+ '<div class="sec"><h4>Description</h4><p>'+esc(t.desc)+'</p></div>'+
+ '<div class="sec"><h4>Acceptance criteria</h4>'+t.ac.map(function(a){return '<div class="ac"><span class="tick '+(a[1]?'y':'')+'">'+ic('check')+'</span><span>'+esc(a[0])+'</span></div>'}).join('')+'</div>'+
+ '<div class="sec"><h4>Linked cubes</h4>'+(t.cubes.length?t.cubes.map(function(c){var cb=CUBES.find(function(x){return x.id===c});return '<button class="mc" style="margin-bottom:8px" data-act="cubeOpen" data-arg="'+c+'"><span class="cid">'+c+'</span> <span class="chip">'+SLAB[cb.st]+'</span><b>'+esc(cb.title)+'</b></button>'}).join(''):'<p class="muted">No cubes yet. Claude will propose some once it picks this up.</p>')+'</div>'+
+ '<div class="sec"><h4>Files changed</h4>'+(t.ch.length?t.ch.map(function(c){return '<div class="fch"><span class="mono" style="flex:1">'+c[0]+'</span><span class="add">+'+c[1]+'</span><span class="del">-'+c[2]+'</span>'+openInBtn(c[0])+'</div>'}).join(''):'<p class="muted">Nothing changed yet.</p>')+'</div>'+
+ '<div class="sec"><h4>Activity</h4><div class="tl">'+t.act.map(function(a,i){return '<div>'+esc(a)+'<small>'+(i+1)*7+' min ago</small></div>'}).join('')+'</div></div>'+
+ '<div class="sec"><h4>Ask Claude about this ticket</h4><textarea class="field" id="dask" rows="3" placeholder="For example: why is this a high priority?"></textarea><div style="margin-top:12px"><button class="btn pri" data-act="askTicket">Send comment to Claude</button></div></div>';
+ hydrate($('#drawer'));$('#scrim').classList.add('on');$('#drawer').classList.add('on');$('#drawer').scrollTop=0}
+document.addEventListener('change',function(e){if(e.target.dataset&&e.target.dataset.chg==='status'){moveTicket(openKey,e.target.value);openTicket(openKey)}});
+
+/* ---------- CUBES ---------- */
+function flowHtml(c,all){var n=c.flow.length,show=all||n<=3?n:3;var h='<div class="flow">';c.flow.slice(0,show).forEach(function(s){h+='<div class="fn" style="--fc:'+fcol(s.f)+'"><i></i><div class="l"><code><b>'+s.f+'</b> &rsaquo; '+s.fn+'</code>'+(s.calls?' <span class="faint" style="font-size:12px">&rarr; '+s.calls.split('/').pop()+'</span>':'')+'<div class="d">'+esc(s.does)+'</div></div></div>'});
+ h+='</div>';if(show<n)h+='<button class="more" data-act="foldMore" data-arg="'+c.id+'">+'+(n-show)+' more steps</button>';return h}
+function lifeHtml(c){var idx={proposed:0,approved:1,running:2,review:3,changes:3,passed:4,done:5}[c.st];var s='<div class="life">';for(var i=0;i<6;i++)s+='<i class="'+(i<idx?'on':(i===idx?'now':''))+'"></i>';return s+'</div><div class="lifelab"><span>Proposed</span><span>Running</span><span>PR review</span><span>Done</span></div>'}
+function revBadge(c){if(!c.rev)return '';var v=c.rev.verdict;var cl=v==='APPROVE'?'ok':(v==='REQUEST CHANGES'?'warn':'blue');return '<div class="rev"><span class="chip '+cl+'">PR review: '+v+'</span>'+['P0','P1','P2','P3'].map(function(s,i){return '<span><span class="sev '+s+'">'+s+'</span> <span class="sevn">'+c.rev.p[i]+'</span></span>'}).join('')+'</div>'}
+function cubeCard(c){var prim=(c.st==='proposed')?'<button class="btn pri" data-act="approve" data-arg="'+c.id+'">Approve</button>':(c.st==='review'?'<button class="btn pri" data-act="goReview">Read PR review</button>':'<button class="btn pri" data-act="cubeOpen" data-arg="'+c.id+'">Open details</button>');
+ return '<article class="cube '+c.st+'" id="cube-'+c.id+'"><div class="h"><span class="cid">'+c.id+'</span><span class="chip '+({proposed:'',approved:'blue',running:'blue',review:'warn',changes:'bad',passed:'ok',done:'ok'}[c.st])+'">'+SLAB[c.st]+'</span><span class="sp"></span><span class="faint" style="font-size:13px">'+c.min+' min</span></div><h4>'+esc(c.title)+'</h4><p class="act">'+esc(c.action)+'</p><div class="dw"><b>Done when</b>'+esc(c.dw)+'</div>'+flowHtml(c)+revBadge(c)+lifeHtml(c)+'<div class="cact">'+prim+'<button class="btn" data-act="cubeAsk" data-arg="'+c.id+'">Ask</button><span class="sp"></span><button class="btn ghost sm" data-act="cubeMenu" data-arg="'+c.id+'" aria-label="More actions">'+ic('dots',18)+'</button></div></article>'}
+function renderCubes(){$('#lanes').innerHTML='<svg class="deps" id="depsvg"></svg>'+LANES.map(function(l,i){return '<div class="lane"><h3><b>&#10022;</b>Stage '+(i+1)+': '+l+'</h3>'+CUBES.filter(function(c){return c.lane===i}).map(cubeCard).join('')+'</div>'}).join('');requestAnimationFrame(drawDeps)}
+function drawDeps(){var svg=$('#depsvg');if(!svg||!$('#s-cubes').classList.contains('on'))return;var wr=$('#lanes').getBoundingClientRect();var p='';CUBES.forEach(function(c){c.after.forEach(function(a){var s=$('#cube-'+a),d=$('#cube-'+c.id);if(!s||!d)return;var sr=s.getBoundingClientRect(),dr=d.getBoundingClientRect();if(sr.right>dr.left-10)return;var x1=sr.right-wr.left,y1=sr.top+40-wr.top,x2=dr.left-wr.left,y2=dr.top+40-wr.top,m=(x2-x1)/2;p+='<path d="M'+x1+' '+y1+' C'+(x1+m)+' '+y1+','+(x2-m)+' '+y2+','+(x2-6)+' '+y2+'" fill="none" stroke="var(--star)" stroke-opacity=".55" stroke-width="2" stroke-dasharray="5 5"/><path d="M'+(x2-10)+' '+(y2-5)+' L'+x2+' '+y2+' L'+(x2-10)+' '+(y2+5)+'" fill="none" stroke="var(--star)" stroke-width="2"/>'})});svg.innerHTML=p}
+window.addEventListener('resize',function(){drawDeps()});
+function cubeDetail(id,focusAsk){var c=CUBES.find(function(x){return x.id===id});var groups={};c.flow.forEach(function(s){(groups[s.f]=groups[s.f]||[]).push(s)});
+ var dv=$('#cube-detail');
+ dv.innerHTML='<button class="btn back" data-act="cubeBack">&larr; All cubes</button><div class="ph"><div><div style="display:flex;gap:10px;align-items:center;margin-bottom:8px"><span class="cid">'+c.id+'</span><span class="chip '+({proposed:'',approved:'blue',running:'blue',review:'warn',changes:'bad',passed:'ok',done:'ok'}[c.st])+'">'+SLAB[c.st]+'</span><span class="faint">'+c.min+' min</span></div><h1>'+esc(c.title)+'</h1><p>'+esc(c.action)+'</p></div><span class="sp"></span>'+(c.st==='proposed'?'<button class="btn pri" data-act="approve" data-arg="'+c.id+'">Approve</button>':'')+'<button class="btn" data-act="cubeMenu" data-arg="'+c.id+'">More actions '+ic('dots',16)+'</button></div>'+
+ '<div class="dgrid"><div><div class="card" style="margin-bottom:var(--s4)"><div class="dw" style="margin-bottom:var(--s4)"><b>Done when</b>'+esc(c.dw)+'</div><h3 style="font-size:16px;margin-bottom:var(--s3)">Call graph</h3>'+
+ Object.keys(groups).map(function(f){return '<div class="fgroup" style="--fc:'+fcol(f)+'"><div class="gh">'+f+'</div>'+groups[f].map(function(s){return '<div class="fn" style="--fc:'+fcol(f)+'"><i></i><div class="l"><code><b>'+s.fn+'</b></code>'+(s.calls?' <span class="faint" style="font-size:12px">calls '+s.calls+'</span>':'')+'<div class="d">'+esc(s.does)+'</div></div></div>'}).join('')+'</div>'}).join('')+'</div>'+
+ '<div class="card cube '+c.st+'" style="padding-top:var(--s4);box-shadow:none"><h3 style="font-size:16px;margin-bottom:var(--s3)">Progress</h3>'+lifeHtml(c)+'</div></div>'+
+ '<div><div class="card" style="margin-bottom:var(--s4)"><h3 style="font-size:16px;margin-bottom:4px">PR review</h3>'+(c.rev?'<p class="muted" style="font-size:14px;margin-bottom:var(--s3)">The reviewer found one real problem: two writers can overwrite the ticket file at once.</p>'+revBadge(c)+'<div style="margin-top:var(--s3)"><button class="btn pri" data-act="goReview">Open full review</button></div>':'<p class="muted" style="font-size:14px">No review yet. It runs automatically when this cube finishes.</p>')+'</div>'+
+ '<div class="card"><h3 style="font-size:16px;margin-bottom:4px">Ask about this cube</h3><p class="muted" style="font-size:13.5px;margin-bottom:var(--s3)">Questions only. Asking never changes the cube; use Request change for that.</p><div class="thr" id="athr"><div class="bub me">Why does c4 write to a temp file first?</div><div class="bub">So a crash half way through cannot leave a broken tickets.json. The rename at the end is atomic.</div></div><textarea class="field" id="aq" rows="2" placeholder="Ask a question"></textarea><div style="margin-top:12px"><button class="btn pri" data-act="askCube">Ask Claude</button></div></div></div></div>';
+ $('#cubes-list').style.display='none';dv.style.display='block';hydrate(dv);nav('cubes');$('#s-cubes').scrollTop=0;if(focusAsk){setTimeout(function(){$('#aq').focus()},50)}}
+
+/* ---------- REVIEW ---------- */
+var rtab='u',reviewed=true,qAns={};
+function renderReview(){var b=$('#rbody'),h='';
+ if(rtab==='u'){h='<div class="rgrid"><div class="card"><h4>What it does</h4><p>Adds a ticket board. Tickets are saved to a file next to the session and each one can link to cubes.</p></div><div class="card"><h4>Why it exists</h4><p>So you can hand work to Claude from the page and watch it move, instead of juggling terminal prompts.</p></div>'+
+ '<div class="card" style="grid-column:1/-1"><h4>How it runs</h4><p>From a click in the browser to a saved file.</p><div class="flowline"><span class="fnode">board.js drop()</span>&rarr;<span class="fnode">POST /api/tickets</span>&rarr;<span class="fnode">tickets.js move()</span>&rarr;<span class="fnode">tickets.js save()</span>&rarr;<span class="fnode">tickets.json</span>&rarr;<span class="fnode">SSE to page</span></div></div>'+
+ '<div class="card"><h4>What else it touches</h4><ul><li>The Board screen reads the same file</li><li>Cube c6 will read tickets for its scope</li><li>Usage is not affected</li></ul></div><div class="card"><h4>Where a human should look</h4><ul><li>web/tickets.js: concurrent writes</li><li>web/queue.js: empty prompt</li></ul></div></div>'}
+ if(rtab==='f'){h=FINDINGS.map(function(f,i){return '<div class="finding"><div class="t"><span class="sev '+f.sev+'">'+f.sev+'</span><b>'+esc(f.t)+'</b><span style="flex:1"></span>'+openInBtn(f.f)+'</div><button class="flink" style="align-self:flex-start" data-act="openIn" data-arg="'+f.f+'">'+f.f+':'+f.l+'</button><p class="muted" style="font-size:14.5px">'+esc(f.why)+'</p><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn '+(f.sent?'':'pri')+' sm" data-act="sendFix" data-arg="'+i+'">'+(f.sent?'Sent to Claude':'Send fix to Claude')+'</button><span class="faint" style="font-size:13px">Suggested: '+esc(f.fix)+'</span></div></div>'}).join('')}
+ if(rtab==='d'){h='<div style="display:flex;gap:10px;margin-bottom:var(--s3);flex-wrap:wrap;align-items:center"><div class="tabs" style="margin:0"><button class="'+(diffMode==='u'?'on':'')+'" data-act="dmode" data-arg="u">Unified</button><button class="'+(diffMode==='s'?'on':'')+'" data-act="dmode" data-arg="s">Split</button></div><span class="faint" style="font-size:13.5px">Click any line to leave a comment.</span><span style="flex:1"></span><div class="revbar"><button class="btn" data-act="sendReview">Send review to Claude</button><button class="btn pri" data-act="approveChanges">Approve changes</button></div></div>'+DIFF.map(diffFile).join('')}
+ if(rtab==='q'){h='<p class="muted" style="margin-bottom:var(--s4);max-width:60ch">Three questions to check you understand this change before you approve it.</p>'+QUIZ.map(function(q,qi){return '<div class="q"><h4>'+(qi+1)+'. '+esc(q.q)+'</h4>'+q.o.map(function(o,oi){var s='';if(qAns[qi]!==undefined){if(oi===q.a)s='right';else if(oi===qAns[qi])s='wrong'}return '<button class="opt '+s+'" '+(qAns[qi]!==undefined?'disabled':'')+' data-act="quiz" data-arg="'+qi+','+oi+'"><b>'+'ABCD'[oi]+'</b>'+esc(o)+'</button>'}).join('')+'<p class="why '+(qAns[qi]!==undefined?'on':'')+'">'+(qAns[qi]===q.a?'Correct. ':'Not quite. ')+esc(q.w)+'</p></div>'}).join('')+(Object.keys(qAns).length===3?'<div class="hint">You got '+QUIZ.filter(function(q,i){return qAns[i]===q.a}).length+' of 3.</div>':'')}
+ b.innerHTML=h;hydrate(b)}
+var diffMode='u';
+function tok(s){var e=esc(s);return e.replace(/(\/\/.*$)|(&quot;[^&]*?&quot;|"[^"]*")|\b(export|function|const|return|if|import|from|new|async|await)\b|\b(\d+)\b/g,function(m,c,st,k,n){return c?'<span class="tk-c">'+c+'</span>':st?'<span class="tk-s">'+st+'</span>':k?'<span class="tk-t">'+k+'</span>':'<span class="tk-n">'+n+'</span>'})}
+function diffFile(d,fi){var h='<div class="diff"><div class="dfh"><span>'+d.f+'</span><span class="sp"></span>'+openInBtn(d.f)+'</div><div class="dscroll">';
+ var cl={'+':'add','-':'del',' ':'ctx'};
+ if(diffMode==='u'){d.L.forEach(function(l,i){h+='<div class="dl '+cl[l[0]]+'" data-act="lineCmt" data-arg="'+fi+'-'+i+'"><span class="n">'+l[1]+'</span><span class="n">'+l[2]+'</span><span class="c">'+tok(l[3])+'</span></div><div id="cm-'+fi+'-'+i+'"></div>'})}
+ else{var L='',R='';d.L.forEach(function(l,i){if(l[0]===' '){L+=sl('ctx',l[1],l[3],fi,i);R+=sl('ctx',l[2],l[3],fi,i)}else if(l[0]==='-'){L+=sl('del',l[1],l[3],fi,i);R+='<div class="dl ctx"><span class="n"></span><span class="c"></span></div>'}else{L+='<div class="dl ctx"><span class="n"></span><span class="c"></span></div>';R+=sl('add',l[2],l[3],fi,i)}});h+='<div class="split"><div>'+L+'</div><div>'+R+'</div></div>'}
+ return h+'</div></div>'}
+function sl(c,n,t,fi,i){return '<div class="dl '+c+'" data-act="lineCmt" data-arg="'+fi+'-'+i+'"><span class="n">'+n+'</span><span class="c">'+tok(t)+'</span></div>'}
+
+/* ---------- FILES ---------- */
+var selFile=FILES[0].p;
+function renderFiles(){var g={};FILES.forEach(function(f){var d=f.p.indexOf('/')>-1?f.p.split('/').slice(0,-1).join('/'):'.';(g[d]=g[d]||[]).push(f)});
+ $('#tree').innerHTML=Object.keys(g).map(function(d){return '<div class="fold">'+ic('file',16)+d+'/</div>'+g[d].map(function(f){return '<button class="fi '+(f.p===selFile?'on':'')+'" data-act="selFile" data-arg="'+f.p+'"><span class="nm">'+f.p.split('/').pop()+'</span><span class="badge '+f.st+'">'+(f.st==='new'?'new':'edited')+'</span><small>'+f.t+'</small></button>'}).join('')}).join('');
+ var f=FILES.find(function(x){return x.p===selFile});
+ $('#prev').innerHTML='<div class="ph2"><b class="mono" style="font-size:14px">'+f.p+'</b><span class="badge '+f.st+'">'+(f.st==='new'?'new':'edited')+'</span><span class="sp"></span><button class="btn sm" data-act="copyPath" data-arg="'+f.p+'">Copy path</button>'+openInBtn(f.p)+'</div><div class="code">'+f.code.replace(/\n$/,'').split('\n').map(function(l,i){return '<div><span class="n">'+(i+1)+'</span><span class="c">'+tok(l)+'</span></div>'}).join('')+'</div>';hydrate($('#prev'))}
+
+/* ---------- USAGE ---------- */
+function renderUsage(){var mx=Math.max.apply(null,USAGE_TURNS),w=520,h=90;var pts=USAGE_TURNS.map(function(v,i){return (i/(USAGE_TURNS.length-1)*w).toFixed(1)+','+(h-8-v/mx*(h-16)).toFixed(1)}).join(' ');
+ function m(t,p,col,big,sub){return '<div class="card um"><div class="rg">'+ring(p,col)+'<b>'+p+'%</b></div><div><h3>'+t+'</h3><div class="big">'+big+'</div><p class="muted" style="font-size:14px;margin-top:4px">'+sub+'</p></div></div>'}
+ $('#ugrid').innerHTML=m('Context window',38,'var(--shimmer)','76k of 200k tokens','Claude still has plenty of room in this chat.')+m('5-hour limit',41,'var(--star)','Resets in 2h 14m','Counts everything you ran in the last 5 hours.')+m('Weekly limit',62,'var(--warn)','Resets Mon 09:00','Used 62% so far this week.')+
+ '<div class="card"><h3 style="font-size:16px">Session tokens</h3><div class="big" style="font-size:22px;font-weight:700;margin-top:6px">412k total</div><div class="stack"><i style="flex:76;background:var(--shimmer)"></i><i style="flex:44;background:var(--star)"></i><i style="flex:292;background:var(--surface-3)"></i></div><div class="leg"><span style="--c:var(--shimmer)">Input 76k</span><span style="--c:var(--star)">Output 44k</span><span style="--c:var(--surface-3)">Cache 292k</span></div></div>'+
+ '<div class="card"><h3 style="font-size:16px">Cost this session</h3><div class="big" style="font-size:34px;font-weight:700;margin:6px 0">$3.18</div><p class="muted" style="font-size:14px">Opus $2.61 &middot; Sonnet executors $0.57. Most of it was reading files.</p></div>'+
+ '<div class="card" style="grid-column:1/-1"><h3 style="font-size:16px;margin-bottom:var(--s3)">Tokens per turn <span class="faint" style="font-weight:400;font-size:13px">last 20 turns</span></h3><svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" style="width:100%;height:110px"><defs><linearGradient id="sg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#0A84FF" stop-opacity=".35"/><stop offset="1" stop-color="#0A84FF" stop-opacity="0"/></linearGradient></defs><polygon points="0,'+h+' '+pts+' '+w+','+h+'" fill="url(#sg)"/><polyline points="'+pts+'" fill="none" stroke="var(--shimmer)" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg></div>'}
+
+/* ---------- palette ---------- */
+var CMDS=[['Go to Session','nav:session'],['Go to Board','nav:board'],['Go to Cubes','nav:cubes'],['Go to Review','nav:review'],['Go to Files','nav:files'],['Go to Usage','nav:usage'],['New ticket','new'],['Run PR review','run'],['Open ticket TP-12','tk:TP-12'],['Open cube c3','cube:c3'],['Stop Claude','stop']];
+var palSel=0;
+function palRender(){var q=$('#palq').value.toLowerCase();var l=CMDS.filter(function(c){return c[0].toLowerCase().indexOf(q)>-1});palSel=Math.min(palSel,Math.max(0,l.length-1));$('#pall').innerHTML=l.map(function(c,i){return '<li><button class="'+(i===palSel?'sel':'')+'" data-act="palRun" data-arg="'+c[1]+'">'+c[0]+'<small>'+c[1].split(':')[0]+'</small></button></li>'}).join('')||'<li class="muted" style="padding:16px">Nothing matches. Try a screen name.</li>'}
+$('#palq').addEventListener('input',function(){palSel=0;palRender()});
+$('#palq').addEventListener('keydown',function(e){var n=document.querySelectorAll('#pall button').length;if(e.key==='ArrowDown'){palSel=(palSel+1)%n;palRender();e.preventDefault()}if(e.key==='ArrowUp'){palSel=(palSel+n-1)%n;palRender();e.preventDefault()}if(e.key==='Enter'){var b=document.querySelectorAll('#pall button')[palSel];if(b)b.click()}});
+function openPal(){closeAll();$('#scrim').classList.add('on');$('#pal').classList.add('on');$('#palq').value='';palRender();$('#palq').focus()}
+
+/* ---------- nav / overlays ---------- */
+function nav(s){document.querySelectorAll('.screen').forEach(function(x){x.classList.toggle('on',x.id==='s-'+s)});document.querySelectorAll('.navb').forEach(function(b){b.classList.toggle('on',b.dataset.arg===s)});hidePop();
+ if(s==='cubes'){if($('#cube-detail').style.display!=='block')requestAnimationFrame(drawDeps)}if(s==='files')renderFiles();if(s==='session')scrollChat();}
+function closeAll(){['scrim','modal','drawer','pal'].forEach(function(i){$('#'+i).classList.remove('on')});hidePop()}
+function newTicket(){closeAll();$('#acl').innerHTML='';addAc('Works after a server restart');addAc('');$('#nt-title').value='';$('#scrim').classList.add('on');$('#modal').classList.add('on');$('#nt-title').focus()}
+function addAc(v){var r=document.createElement('div');r.className='row';r.innerHTML='<span class="tick"></span><input class="field" style="flex:1" placeholder="A check that proves it works" value="'+esc(v||'')+'" aria-label="Acceptance check">';$('#acl').appendChild(r)}
+var qTimer;
+function sendMsg(){var v=$('#msg').value.trim();if(!v)return;var busy=$('#status').classList.contains('warn');var att=$('#attlab').textContent!=='Attach ticket';var b=bubbleUser(v,busy);if(att)b.insertAdjacentHTML('beforeend',' <span class="qb">'+$('#attlab').textContent+'</span>');$('#msg').value='';$('#qbadge').style.display=busy?'inline-flex':'none';
+ clearTimeout(qTimer);qTimer=setTimeout(function(){$('#qbadge').style.display='none';var q=b.querySelector('.qb');if(busy&&q&&/queued/.test(q.textContent))q.remove();chatEl.insertAdjacentHTML('beforeend',claude('<p>Got it. I will take that on after the current cube.</p>'));scrollChat()},3200)}
+var acts={
+ nav:function(t){nav(t.dataset.arg)},
+ stop:function(){var s=$('#status');s.className='chip';s.innerHTML='Idle';toast('Stopped. Claude is idle.')},
+ palette:openPal,newTicket:newTicket,closeAll:closeAll,addAc:function(){addAc('')},
+ createTicket:function(t){var title=$('#nt-title').value.trim()||'Untitled ticket';var k='TP-'+(18+TICKETS.length-9);var as=t.dataset.arg==='claude'?'claude':$('#nt-as').value;TICKETS.unshift({key:k,type:$('#nt-type').value,title:title,prio:$('#nt-pr').value,as:as,st:as==='claude'?'todo':'backlog',cubes:[],files:0,pr:[0,1],desc:$('#nt-desc').value||'No description yet.',ac:[['Works as described',0]],act:['You created this ticket'],ch:[]});closeAll();nav('board');renderBoard();toast(as==='claude'?k+' created and assigned to Claude':k+' created')},
+ openTicket:function(t){openTicket(t.dataset.arg)},
+ askTicket:function(){var v=$('#dask').value.trim();if(!v)return;toast('Comment sent to Claude');$('#dask').value=''},
+ perm:function(t){var c=$('#permcard');c.classList.add('done');c.innerHTML='<h4>Bash: npm test</h4><p class="muted" style="margin-top:6px">'+t.dataset.arg+' &#10003;</p>'},
+ attach:function(t){var on=$('#attlab').textContent==='Attach ticket';$('#attlab').textContent=on?'TP-13':'Attach ticket';toast(on?'Ticket TP-13 attached to your next message':'Ticket detached')},
+ send:sendMsg,
+ togglePanel:function(){$('#panel').classList.toggle('off')},
+ cubeOpen:function(t){closeAll();cubeDetail(t.dataset.arg)},
+ cubeAsk:function(t){cubeDetail(t.dataset.arg,true)},
+ cubeBack:function(){$('#cube-detail').style.display='none';$('#cubes-list').style.display='block';requestAnimationFrame(drawDeps)},
+ foldMore:function(t){var c=CUBES.find(function(x){return x.id===t.dataset.arg});t.previousElementSibling.outerHTML=flowHtml(c,true).replace(/<button[\s\S]*$/,'');t.remove()},
+ approve:function(t){var c=CUBES.find(function(x){return x.id===t.dataset.arg});c.st='approved';renderCubes();if($('#cube-detail').style.display==='block')cubeDetail(c.id);toast(c.id+' approved. It will run next.')},
+ approveAll:function(){CUBES.forEach(function(c){if(c.st==='proposed')c.st='approved'});renderCubes();toast('All proposed cubes approved')},
+ cubeMenu:function(t){showPop(t,[{l:'Request change'},{l:'Ask a question',i:'chat'},{l:'Reject cube',d:1}]);$('#pop').dataset.cube=t.dataset.arg},
+ goReview:function(){closeAll();nav('review')},
+ runReview:function(){var l=$('#rrlab');l.textContent='Reviewing...';setTimeout(function(){l.textContent='Run PR review';toast('Review finished: REQUEST CHANGES, 1 P1')},1400)},
+ rtab:function(t){rtab=t.dataset.arg;document.querySelectorAll('#rtabs button').forEach(function(b){b.classList.toggle('on',b===t)});renderReview()},
+ sendFix:function(t){FINDINGS[+t.dataset.arg].sent=1;renderReview();toast('Fix request sent to Claude')},
+ dmode:function(t){diffMode=t.dataset.arg;renderReview()},
+ lineCmt:function(t,e){if(e.target.closest('.cmt'))return;var id='cm-'+t.dataset.arg;var host=$('#'+id);if(host){host.innerHTML=host.innerHTML?'':'<div class="cmt"><textarea class="field" placeholder="Comment on this line"></textarea><button class="btn sm pri" data-act="postCmt">Comment</button></div>';var ta=host.querySelector('textarea');if(ta)ta.focus()}else{toast('Comments are available in Unified view')}},
+ postCmt:function(t){var p=t.closest('.cmt');p.innerHTML='<span>You: '+esc(p.querySelector('textarea').value||'Looks risky')+'</span>'},
+ sendReview:function(){toast('Review and comments sent to Claude')},approveChanges:function(){var v=$('#vbig');v.className='vbig ap';v.textContent='APPROVE';toast('Changes approved')},
+ quiz:function(t){var a=t.dataset.arg.split(',');qAns[+a[0]]=+a[1];renderReview()},
+ selFile:function(t){selFile=t.dataset.arg;renderFiles()},
+ copyPath:function(t){try{navigator.clipboard.writeText(t.dataset.arg)}catch(_){}toast('Path copied')},
+ openIn:function(t){openIn(t,t.dataset.arg)},
+ popPick:function(t){var m=t.dataset.arg;hidePop();toast(m+(m==='View here'?'':' (mock)'));if(m==='View here'){nav('files');selFile=(FILES.find(function(f){return f.p===($('#pop').dataset.path)})||FILES[0]).p;renderFiles()}if(m==='Reject cube'){var c=CUBES.find(function(x){return x.id===$('#pop').dataset.cube});if(c){c.st='proposed';toast(c.id+' rejected (mock)')}}if(m==='Ask a question')cubeDetail($('#pop').dataset.cube,true)},
+ askCube:function(){var v=$('#aq').value.trim();if(!v)return;$('#athr').insertAdjacentHTML('beforeend','<div class="bub me">'+esc(v)+'</div>');$('#aq').value='';setTimeout(function(){$('#athr').insertAdjacentHTML('beforeend','<div class="bub">Good question. Short answer: it keeps the cube small enough to review in one sitting.</div>')},700)},
+ palRun:function(t){var a=t.dataset.arg.split(':');closeAll();if(a[0]==='nav')nav(a[1]);else if(a[0]==='new')newTicket();else if(a[0]==='run'){nav('review');acts.runReview()}else if(a[0]==='tk'){nav('board');openTicket(a[1])}else if(a[0]==='cube')cubeDetail(a[1]);else if(a[0]==='stop')acts.stop()}
+};
+document.addEventListener('click',function(e){var t=e.target.closest('[data-act]');if(!e.target.closest('#pop')&&!(t&&t.dataset.act==='openIn')&&!(t&&t.dataset.act==='cubeMenu'))hidePop();if(!t)return;var f=acts[t.dataset.act];if(f){if(t.dataset.act==='closeAll'||t.classList.contains('tk')||t.dataset.act!=='openTicket')f(t,e);else f(t,e)}});
+document.addEventListener('keydown',function(e){var typing=/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+ if(e.key==='Escape')closeAll();
+ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPal()}
+ else if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&document.activeElement.id==='msg'){sendMsg()}
+ else if(!typing&&e.key.toLowerCase()==='n'&&!e.ctrlKey&&!e.metaKey){e.preventDefault();newTicket()}
+ else if(!typing&&e.key==='Enter'&&document.activeElement.classList.contains('tk')){openTicket(document.activeElement.dataset.key)}});
+
+hydrate();renderBoard();renderCubes();renderReview();renderUsage();renderFiles();
+setTimeout(scrollChat,50);
+</script>
+</body>
+</html>

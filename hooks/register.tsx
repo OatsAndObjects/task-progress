@@ -18,10 +18,7 @@ import {
   onToolCall,
   onTurnComplete,
   registerDashboard,
-  webTarget,
 } from './dashboard'
-import { registerPerm } from './dash-perm'
-import { mirrorToolStart,mirrorTurnEnd, registerMirror } from './dash-mirror'
 import { parseBudget } from './dashboard-model'
 import { buildBoard, gateCheck, topoOrder } from './cubes-model'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
@@ -70,7 +67,7 @@ const ORCH_PROMPT = [
   '2) Break the task into steps and call TaskPlan (task, steps with minutes).',
   `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt whose first line is "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
   '4) Do not edit code or run builds yourself; review reports, re-plan, update TaskProgress. If an executor ran out of time, re-dispatch the rest with a new budget.',
-  'Multi-action tasks: TaskPlan `cubes` (id,title,action,flow 2-6 steps {file,fn,does,calls?} down to functions (non-code: file "shell", fn the command),after,doneWhen,minutes<=10), then STOP: the user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Changes: CubeRevise.',
+  'Multi-action tasks: TaskPlan `cubes` (id,title,action,flow 2-6 steps {file,fn,does,calls?} down to functions (non-code: file "shell", fn the command),after,doneWhen,details,minutes<=10), then STOP: the user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Changes: CubeRevise.',
   'Each cube ends with a review: after its executor reports, dispatch one (tag "review: <id>", not cubes:) running Skill "pr-reviewer" on its changed files, then CubeReview; fix P0/P1 before done.',
   'Full protocol: skill task-progress:orchestrate. Executor agents ignore this section.',
 ].join(' ')
@@ -96,6 +93,7 @@ const CUBE_SCHEMA = {
     after: { type: 'array', items: { type: 'string' }, description: 'Ids of cubes that must be done first.' },
     doneWhen: { type: 'string', description: 'A verifiable check that proves the cube is done.' },
     files: { type: 'array', items: { type: 'string' } },
+    details: { type: 'string', description: 'A descriptive paragraph in plain words: what this cube does, why, which files/functions it touches, and the risks or things to check. 2-6 sentences.' },
     minutes: { type: 'number', minimum: 0.5, maximum: 10 },
   },
   required: ['id', 'title', 'action', 'flow', 'doneWhen', 'minutes'],
@@ -483,10 +481,8 @@ async function orchestrateCommand($: any, e: any) {
 
 export const register: Register = on => {
   const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [], composeSeen: false, rulesSent: false }
-  // The session dashboard: /tp-dashboard and its pane. Its collectors ride on the hooks below.
+  // The session dashboard: /tp-dashboard (web). Its collectors ride on the hooks below.
   registerDashboard(on)
-  registerMirror(on, webTarget)
-  registerPerm(on, webTarget)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -546,7 +542,7 @@ export const register: Register = on => {
             type: 'array',
             items: CUBE_SCHEMA,
             description:
-              'Atomic approval cubes; preferred over steps. The user approves each before it runs. Break every cube down to functions: each flow step names the file and function, what it does, and which function it calls next; non-code steps use file "shell" and the command as fn. Every cube ends with a PR review (pr-reviewer skill, then CubeReview).',
+              'Atomic approval cubes; preferred over steps. The user approves each before it runs. Break every cube down to functions: each flow step names the file and function, what it does, and which function it calls next; non-code steps use file "shell" and the command as fn. Always fill `details`: a plain-words paragraph (what, why, what it touches, risks). Every cube ends with a PR review (pr-reviewer skill, then CubeReview).',
           },
         },
         required: ['task'],
@@ -567,6 +563,7 @@ export const register: Register = on => {
           after: { type: 'array', items: { type: 'string' } },
           doneWhen: { type: 'string' },
           files: { type: 'array', items: { type: 'string' } },
+          details: { type: 'string', description: 'A descriptive paragraph in plain words: what this cube does, why, which files/functions it touches, and the risks or things to check. 2-6 sentences.' },
           minutes: { type: 'number' },
           splitInto: { type: 'array', items: CUBE_SCHEMA },
         },
@@ -852,7 +849,6 @@ export const register: Register = on => {
       }
     }
     await quiet(onTurnComplete($, e))
-    mirrorTurnEnd($, e)
     return next(e)
   })
 
@@ -864,7 +860,6 @@ export const register: Register = on => {
   // The enforcement hook: input gate and dispatch budget for the main session, time
   // budget for sub-agents. Plugin tools answer in their own hooks above.
   on('tool.call', async ($, e, next) => {
-    const mirrorDone = mirrorToolStart($, e)
     const d = await gateDecision($, e, next.origin?.plugin === PLUGIN, c)
     let out: any
     if (d.deny !== undefined) {
@@ -873,7 +868,6 @@ export const register: Register = on => {
       out = await next(e)
       if (d.notice && out.deny === undefined) out = { ...out, context: [...(out.context ?? []), d.notice] }
     }
-    mirrorDone(out)
     await quiet(onToolCall($, e, out))
     return out
   })
