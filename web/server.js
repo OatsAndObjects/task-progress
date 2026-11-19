@@ -60,7 +60,7 @@ function emit(obj) {
     process.stdout.write(JSON.stringify(obj) + '\n');
   } catch (e) {
     log('stdout write failed:', e.message);
-    shutdown(1);
+    shutdown(1, 'stdout-closed');
   }
 }
 
@@ -411,6 +411,7 @@ async function handle(req, res) {
         return sendJson(res, 400, { ok: false, message: 'snapshot must be a JSON object' });
       }
       latestSnapshot = JSON.stringify(body);
+      sawSnapshot = true;
       armIdleTimer(IDLE_MS);
       broadcastSnapshot();
       return sendJson(res, 200, { ok: true, clients: streamClients.size });
@@ -495,6 +496,9 @@ function listen(port) {
       listen(port + 1);
     } else {
       emit({ type: 'error', message: `cannot listen (${err.code || err.message}) on ports ${FIRST_PORT}-${LAST_PORT}` });
+      try {
+        process.stdout.write(JSON.stringify({ type: 'exit', reason: 'listen-failed', at: Date.now() }) + '\n');
+      } catch {}
       process.exit(1);
     }
   };
@@ -511,9 +515,13 @@ function listen(port) {
 
 // ---------- lifecycle ----------
 let shuttingDown = false;
-function shutdown(code) {
+function shutdown(code, reason) {
   if (shuttingDown) return;
   shuttingDown = true;
+  // Best effort, and not via emit(): emit() calls shutdown when the write fails.
+  try {
+    process.stdout.write(JSON.stringify({ type: 'exit', reason: reason || 'unknown', at: Date.now() }) + '\n');
+  } catch {}
   for (const { res, timer } of pending.values()) {
     clearTimeout(timer);
     try {
@@ -533,17 +541,18 @@ function shutdown(code) {
   setTimeout(() => process.exit(code || 0), 50).unref();
 }
 
-process.on('SIGTERM', () => shutdown(0));
-process.on('SIGINT', () => shutdown(0));
-process.stdout.on('error', () => shutdown(1)); // EPIPE: parent gone
+process.on('SIGTERM', () => shutdown(0, 'SIGTERM'));
+process.on('SIGINT', () => shutdown(0, 'SIGINT'));
+process.stdout.on('error', () => shutdown(1, 'stdout-closed')); // EPIPE: parent gone
 // No stdin watch: the host spawns us with stdin already closed. Liveness comes from
 // the snapshot POSTs instead (see armIdleTimer).
 let idleTimer = null;
+let sawSnapshot = false;
 function armIdleTimer(ms) {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
     log(`no snapshot for ${ms} ms, exiting`);
-    shutdown(0);
+    shutdown(0, sawSnapshot ? 'idle' : 'no-first-snapshot');
   }, ms);
 }
 armIdleTimer(START_MS);

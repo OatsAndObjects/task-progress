@@ -30,6 +30,14 @@
     '#screen-cubes .desc{display:grid;grid-template-rows:0fr;transition:grid-template-rows .2s ease;margin-top:calc(var(--s3) * -1)}#screen-cubes .cube.open .desc{grid-template-rows:1fr;margin-top:0}',
     '#screen-cubes .descin{overflow:hidden;min-height:0;display:flex;flex-direction:column;gap:var(--s3)}',
     '#screen-cubes .dsec b{display:block;font-size:12px;color:var(--faint);margin-bottom:2px}#screen-cubes .dsec p{font-size:13.5px;color:var(--muted);overflow-wrap:anywhere}',
+    '#screen-cubes .dsec h5,.cdrawer .dsec h5{font-size:12px;font-weight:600;color:var(--faint);margin:0 0 4px}',
+    '#screen-cubes .dsec ul,#screen-cubes .dsec ol,.cdrawer .dsec ul,.cdrawer .dsec ol{margin:0;padding-left:20px;font-size:13.5px;color:var(--muted);display:flex;flex-direction:column;gap:3px}',
+    '#screen-cubes .dsec li,.cdrawer .dsec li{overflow-wrap:anywhere}',
+    '#screen-cubes .dsec p,.cdrawer .dsec p{margin:0;font-size:13.5px;color:var(--muted);overflow-wrap:anywhere}',
+    '#screen-cubes .ct,.cdrawer .ct{display:flex;flex-direction:column;gap:2px;padding:6px 0;border-top:1px solid var(--line)}#screen-cubes .ct:first-of-type,.cdrawer .ct:first-of-type{border-top:0}',
+    '#screen-cubes .ct code,.cdrawer .ct code{font:12.5px var(--mono);overflow-wrap:anywhere;word-break:break-word;color:var(--text)}',
+    '#screen-cubes .ct code span,.cdrawer .ct code span{color:var(--faint)}',
+    '#screen-cubes .ct .cc,.cdrawer .ct .cc{font-size:13px;color:var(--muted);overflow-wrap:anywhere}',
     '#screen-cubes .rsum{font-size:13.5px;color:var(--muted);overflow-wrap:anywhere}',
     '@media (prefers-reduced-motion:reduce){#screen-cubes .desc,#screen-cubes .tog{transition:none}}',
     '#screen-cubes .more{border:0;background:transparent;color:var(--shimmer);font-weight:600;font-size:13px;padding:6px 0;text-align:left}',
@@ -171,6 +179,27 @@
     }).join('') + '</div>';
   }
 
+  // Description sections: summary (fallback details/action/title), problem, steps, code touched.
+  function strs(x) { return arr(x).map(function (v) { return String(v == null ? '' : v).trim(); }).filter(Boolean); }
+  function codeItems(c) {
+    return arr(c.code).map(function (x) {
+      if (x && typeof x === 'object') return { file: String(x.file || ''), change: String(x.change || '') };
+      return { file: String(x == null ? '' : x), change: '' };
+    }).filter(function (x) { return x.file || x.change; });
+  }
+  function shortText(c) { return c.summary || c.action || ''; }
+  function descHtml(c) {
+    var h = '<div class="dsec"><h5>Summary</h5><p>' + esc(c.summary || c.details || c.action || c.title) + '</p></div>';
+    var pr = strs(c.problem), st = strs(c.steps), cd = codeItems(c);
+    if (pr.length) h += '<div class="dsec"><h5>Problem</h5><ul>' + pr.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul></div>';
+    if (st.length) h += '<div class="dsec"><h5>Steps</h5><ol>' + st.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ol></div>';
+    if (cd.length) h += '<div class="dsec"><h5>Code touched</h5>' + cd.map(function (x) {
+      var parts = x.file.split(' › '), f = parts.shift(), fn = parts.join(' › ');
+      return '<div class="ct"><code>' + esc(f) + (fn ? '<span> &rsaquo; ' + esc(fn) + '</span>' : '') + '</code>' + (x.change ? '<div class="cc">' + esc(x.change) + '</div>' : '') + '</div>';
+    }).join('') + '</div>';
+    return h;
+  }
+
   function cubeCard(c) {
     var st = status(c), id = esc(c.id), prim;
     if (st === 'proposed' || st === 'rejected' || st === 'failed') prim = '<button class="btn pri" data-cact="approve" data-id="' + id + '">Approve</button>';
@@ -181,8 +210,8 @@
     return '<article class="cube ' + cls + (isOpen ? ' open' : '') + '" id="cube-' + id + '"><div class="h"><span class="cid">' + id + '</span><span class="chip ' + SCHIP[st] + '">' + esc(chipText(c)) + '</span><span class="sp"></span>' +
       (c.minutes ? '<span class="faint" style="font-size:13px">' + esc(c.minutes) + ' min</span>' : '') +
       '<button class="tog" data-cact="toggle" data-id="' + id + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' description">&#9656;</button></div>' +
-      '<h4>' + esc(c.title) + '</h4>' + (c.action ? '<p class="act">' + esc(c.action) + '</p>' : '') +
-      '<div class="desc"><div class="descin"><div class="dsec"><b>Description</b><p>' + esc(c.details || c.action || c.title) + '</p></div>' +
+      '<h4>' + esc(c.title) + '</h4>' + (shortText(c) ? '<p class="act">' + esc(shortText(c)) + '</p>' : '') +
+      '<div class="desc"><div class="descin">' + descHtml(c) +
       (c.doneWhen ? '<div class="dw"><b>Done when</b>' + esc(c.doneWhen) + '</div>' : '') +
       renderFlow(c, true) + revBadge(c) + (c.review && c.review.summary ? '<p class="rsum">' + esc(c.review.summary) + '</p>' : '') + '</div></div>' +
       lifeHtml(c) +
@@ -265,7 +294,8 @@
     var h = '<div style="--bc:' + bc + '"><button class="btn ghost sm x" data-cact="close" aria-label="Close">Close</button>' +
       '<div class="hd"><span class="cid">' + id + '</span><span class="chip ' + SCHIP[st] + '">' + esc(chipText(c)) + '</span>' +
       (c.minutes ? '<span class="faint">' + esc(c.minutes) + ' min</span>' : '') + '</div><h2>' + esc(c.title) + '</h2>';
-    if (c.action) h += '<p class="muted">' + esc(c.action) + '</p>';
+    if (shortText(c)) h += '<p class="muted">' + esc(shortText(c)) + '</p>';
+    if (c.summary || c.details || arr(c.problem).length || arr(c.steps).length || codeItems(c).length) h += '<div class="sec" style="display:flex;flex-direction:column;gap:var(--s3)">' + descHtml(c) + '</div>';
     var acts = '';
     if (st === 'proposed' || st === 'rejected' || st === 'failed') acts += '<button class="btn pri sm" data-cact="approve" data-id="' + id + '">Approve</button>';
     if (st === 'reviewing') acts += '<button class="btn pri sm" data-cact="markDone" data-id="' + id + '">Mark done</button>';

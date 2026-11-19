@@ -1,6 +1,6 @@
 # task-progress
 
-A Claude Code plugin (v1.0.0). It shows an estimated progress bar above the prompt, runs an orchestrator mode with small executors, asks you to approve the plan as cubes, and has a small web dashboard with two screens (Cubes and Usage).
+A Claude Code plugin (v1.3.0). It shows an estimated progress bar above the prompt, runs an orchestrator mode with small executors, asks you to approve the plan as cubes, and has a small web dashboard with two screens (Cubes and Usage).
 
 ## Progress bar
 
@@ -22,6 +22,10 @@ For a multi-action task, Claude calls `TaskPlan` with `cubes` and stops. Each cu
 
 **A cube** has an `id` (c1, c2, ...), a `title`, one `action` sentence, a `flow` of 2-6 function-level steps, `after` (cubes that must finish first), `doneWhen` (a check that proves it is done), optional `files`, and `minutes` (at most 10). The cubes form a graph; the progress bar mirrors it, one step per cube.
 
+**Description sections.** Every cube also carries `summary` (one or two plain sentences), `problem` (list of bullets), `steps` (ordered list of plain steps) and `code` (list of `{file, change}`: the file or `file › function` and what changes there). All four are required. The card's expandable body and the drawer show them as Summary, Problem, Steps and Code touched, then Done when, the flow and the review. Older cubes with only `details` show it as the Summary.
+
+**Approach question gate.** `TaskPlan` with cubes is refused until Claude has called `AskUserQuestion` with a question whose header is "Approach" for the current prompt (it offers the ways to do the task and you pick one). The flag resets on every new prompt.
+
 **Flow (details).** Each flow step is `{ file, fn, does, calls? }`: the repo-relative path (or `shell`, `browser`, `terminal`), the function or command, one short sentence, and an optional `file:fn` of the next function it calls (the arrow shown between steps). A step missing `file`, `fn` or `does` is refused.
 
 **Atomic rules.** The plan is refused whole, naming the cube to fix, when a cube has no action, an action over 200 characters, fewer than 2 or more than 6 flow steps, no `doneWhen`, no minutes or more than 10, or when ids repeat, `after` names an unknown cube, there is a cycle, or there are more than 40 cubes.
@@ -38,6 +42,13 @@ For a multi-action task, Claude calls `TaskPlan` with `cubes` and stops. Each cu
 
 `/tp-cubes on | off | status` turns the gate on or off for new boards and shows the counts.
 
+
+### Terminal Cubes panel (v1.3.0)
+
+The terminal Cubes panel opens automatically when a cube plan is made, and on resume when cubes are unfinished. In the fullscreen layout it docks beside the transcript from 110 columns; otherwise it sits above the prompt. `/tp-cubes` opens it. Each waiting cube has Approve and Reject, and there is Approve all.
+
+The web dashboard is off by default: run `/tp-dashboard auto on` to start it automatically each session, or `/tp-dashboard web` to start it now.
+
 ## Auto /context then /clear
 
 When the last cube of a plan finishes, the plugin runs `/context`, saves the output (in `~/.claude/task-progress-context/` and on the dashboard), then runs `/clear`. This happens once per plan.
@@ -45,7 +56,7 @@ When the last cube of a plan finishes, the plugin runs `/context`, saves the out
 ## Web dashboard (Cubes and Usage)
 
 - `/tp-dashboard web` starts the local web app (`web/server.js`, needs `node` on PATH) and opens it; `/tp-dashboard web stop` stops it.
-- `/tp-dashboard auto on|off` turns the auto-open on or off. By default it starts and opens once per session.
+- `/tp-dashboard auto on|off` turns the auto-open on or off. It is off by default: the web dashboard only starts when you run `/tp-dashboard web`, or at session start once you turn auto on (then it opens once per session).
 - **Cubes**: the plan as approval cubes with flow, review and all the actions above.
 - **Usage**: context, 5-hour and weekly limits, cost, tokens, and who used them (by cube, executor, model, biggest tool results).
 

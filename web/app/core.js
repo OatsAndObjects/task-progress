@@ -162,12 +162,14 @@ TP.startPolling = function () {
 };
 TP.connect = function () {
   if (typeof EventSource === 'undefined') return TP.startPolling();
+  if (TP.es) { try { TP.es.close(); } catch (e) {} }
   var es = new EventSource('/api/stream?t=' + encodeURIComponent(TP.token)), downTimer = null, everOpen = false;
   TP.es = es;
   es.onopen = function () {
     everOpen = true;
     clearTimeout(downTimer); downTimer = null;
     TP.banner('');
+    TP.poll();
   };
   es.addEventListener('snapshot', function (m) {
     try { TP.onState(JSON.parse(m.data)); } catch (e) { console.error('snapshot', e); }
@@ -177,10 +179,15 @@ TP.connect = function () {
     if (es.readyState === 2) {
       clearTimeout(downTimer);
       if (!everOpen) TP.startPolling();
-      else TP.banner('Lost contact with the dashboard server.');
+      else {
+        // Stream was up and then closed: the server is probably restarting on the same port and token.
+        try { es.close(); } catch (e) {}
+        TP.banner('Dashboard restarting…');
+        if (!TP._retry) TP._retry = setTimeout(function () { TP._retry = null; TP.connect(); }, 3000);
+      }
       return;
     }
-    if (!downTimer) downTimer = setTimeout(function () { TP.banner('Lost contact with the dashboard server. Reconnecting...'); }, 3000);
+    if (!downTimer) downTimer = setTimeout(function () { TP.banner('Dashboard restarting…'); }, 3000);
   };
 };
 

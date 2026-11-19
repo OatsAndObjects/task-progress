@@ -14,6 +14,9 @@ const BAND = {
 } as const
 const MIN = 60_000
 
+const DESC = { summary: 'Does the thing so it works.', problem: ['It is broken'], steps: ['Edit the file'], code: [{ file: 'a.ts › a', change: 'fix it' }] }
+const APPROACH = { questions: [{ header: 'Approach', question: 'How?', options: [{ label: 'A (Recommended)' }, { label: 'B' }] }] }
+
 function setup($: any, on: any) {
   const clock = mock.clock(on, { now: 5_000_000 })
   on('ui.render', ($: any, e: any) => {
@@ -282,9 +285,10 @@ test('CubeAnswer passes the input gate; state-changing tools stay gated', async 
   await start()
   await $.prompt.submit({ text: 'a question about a cube step' })
   expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
+  await call('AskUserQuestion', APPROACH)
   const plan = await call(PLAN, {
     task: 'T',
-    cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }],
+    cubes: [{ ...DESC, id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }],
   })
   expect(String(plan.result)).toContain('cube plan recorded')
   const ans = await call('mcp__task-progress__CubeAnswer', { id: 'c1', answer: 'It adds the thing.' })
@@ -301,7 +305,8 @@ test('CubeReview passes the input gate, stores the review and is registered', as
   await start()
   await $.prompt.submit({ text: 'review a cube' })
   expect((await call('Bash', { command: 'ls' })).deny).toContain('TaskInputs')
-  await call(PLAN, { task: 'T', cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }] })
+  await call('AskUserQuestion', APPROACH)
+  await call(PLAN, { task: 'T', cubes: [{ ...DESC, id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }] })
   const rev = await call('mcp__task-progress__CubeReview', { id: 'c1', verdict: 'REQUEST_CHANGES', summary: 'one bug', findings: [{ severity: 'P1', file: 'a.ts', line: 3, summary: 'null deref' }] })
   expect(rev.deny).toBeUndefined()
   expect(String(rev.result)).toContain('review stored for c1: REQUEST_CHANGES')
@@ -315,7 +320,8 @@ test('CubeReview with a long payload, and a failing handler, still return a resu
   const { call, start } = setup($, on)
   await start()
   await call(INPUTS, { inputs: [], asked: false })
-  await call(PLAN, { task: 'T', cubes: [{ id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }] })
+  await call('AskUserQuestion', APPROACH)
+  await call(PLAN, { task: 'T', cubes: [{ ...DESC, id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }] })
   const long = 'x'.repeat(5000)
   const quiz = Array.from({ length: 5 }, (_, i) => ({ q: `q${i} ${long}`, options: ['a', 'b', 'c', 'd'], answer: 1 }))
   const findings = Array.from({ length: 20 }, (_, i) => ({ severity: 'P2', file: 'a.ts', line: i + 1, summary: long }))
@@ -332,7 +338,7 @@ test('a cube tool handler that throws still answers with a result', async () => 
   expect(r.result).toContain('Do not repeat the call')
 })
 
-const ONE_CUBE = { id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }
+const ONE_CUBE = { ...DESC, id: 'c1', title: 't', action: 'Do one thing', flow: [{ file: 'a.ts', fn: 'a', does: 'a' }, { file: 'b.ts', fn: 'b', does: 'b' }], doneWhen: 'ok', minutes: 3 }
 const TWO_CUBES = [ONE_CUBE, { ...ONE_CUBE, id: 'c2' }]
 
 function ctxSetup($: any, on: any, fail?: string) {
@@ -369,6 +375,7 @@ work`, description: 'step', subagentType: 'task-progress:executor' })
     await s.start()
     await $.command.run({ command: 'tp-cubes', args: 'off' })
     await s.call(INPUTS, { inputs: [], asked: false })
+    await s.call('AskUserQuestion', APPROACH)
     await s.call(PLAN, { task: 'T', cubes })
   }
   return { ...s, calls, writes, toasts, finish, plan }
@@ -399,4 +406,58 @@ test('a failing /context does not throw and shows a toast', async ($, on) => {
   await clock.advance(5000)
   expect(calls).toEqual(['context'])
   expect(toasts.join(' ')).toContain('failed')
+})
+
+test('TaskPlan cubes: refused without the Approach question, then recorded; steps-only is never gated', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await call(INPUTS, { inputs: [], asked: false })
+  const no = await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })
+  expect(String(no.result)).toContain('plan not recorded: Ask the user how to solve this first')
+  expect(String(no.result)).toContain('header is "Approach"')
+  // a different header does not count
+  await call('AskUserQuestion', { questions: [{ header: 'Scope', question: 'x', options: [] }] })
+  expect(String((await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })).result)).toContain('Ask the user how')
+  // sub-agent calls do not count
+  await call('AskUserQuestion', { ...APPROACH, agentId: 'a9' })
+  expect(String((await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })).result)).toContain('Ask the user how')
+  // steps-only plan is not gated
+  expect(String((await call(PLAN, { task: 'T', steps: [{ title: 's', minutes: 1 }] })).result)).toContain('plan recorded')
+  // header match is case-insensitive and trimmed
+  await call('AskUserQuestion', { questions: [{ header: '  approach ', question: 'x', options: [] }] })
+  expect(String((await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })).result)).toContain('cube plan recorded')
+})
+
+test('TaskPlan cubes: missing summary/problem/steps/code are refused by cube id', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await call(INPUTS, { inputs: [], asked: false })
+  await call('AskUserQuestion', APPROACH)
+  const bad = await call(PLAN, { task: 'T', cubes: [ONE_CUBE, { ...ONE_CUBE, id: 'c2', summary: '', problem: [], code: undefined }] })
+  const msg = String(bad.result)
+  expect(msg).toContain('plan not recorded')
+  expect(msg).toContain('cube c2 is missing summary, problem, code')
+  expect(msg).not.toContain('cube c1 is missing')
+  const nosteps = await call(PLAN, { task: 'T', cubes: [{ ...ONE_CUBE, steps: undefined }] })
+  expect(String(nosteps.result)).toContain('cube c1 is missing steps')
+})
+
+test('a new user prompt resets the Approach flag', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await call('AskUserQuestion', APPROACH)
+  expect(String((await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })).result)).toContain('cube plan recorded')
+  await $.prompt.submit({ text: 'next task' })
+  expect(String((await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })).result)).toContain('Ask the user how')
+})
+
+test('gate applies with approval cubes off too, and CubeRevise split needs the fields', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await $.command.run({ command: 'tp-cubes', args: 'off' })
+  expect(String((await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })).result)).toContain('Ask the user how')
+  await call('AskUserQuestion', APPROACH)
+  await call(PLAN, { task: 'T', cubes: [ONE_CUBE] })
+  const sp = await call('mcp__task-progress__CubeRevise', { id: 'c1', splitInto: [{ ...ONE_CUBE, summary: undefined }, { ...ONE_CUBE, id: 'c1b' }] })
+  expect(String(sp.result)).toContain('cube c1 is missing summary')
 })

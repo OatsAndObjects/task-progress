@@ -82,6 +82,13 @@ export type FlowStep = {
   /** Optional "file:fn" of the next function it calls. */
   calls?: string
 }
+/** One piece of code a cube will touch. */
+export type CodeTouch = {
+  /** Repo-relative path, may include " › function". */
+  file: string
+  /** Short plain description of the change. */
+  change: string
+}
 export type ReviewVerdict = 'APPROVE' | 'REQUEST_CHANGES' | 'NEEDS_INVESTIGATION'
 export type ReviewFinding = { severity: 'P0' | 'P1' | 'P2' | 'P3'; file?: string; line?: number; summary: string }
 export type ReviewQuiz = { q: string; options: string[]; answer: number }
@@ -110,6 +117,16 @@ export type Cube = {
   /** A verifiable check that proves the cube is done. */
   doneWhen: string
   files?: string[]
+  /** Legacy plain-words paragraph (older plans); the web falls back to it. */
+  details?: string
+  /** 1-2 plain sentences: what this cube does and why (max 300 chars). */
+  summary?: string
+  /** Points: exactly what problem this cube solves (1-6). */
+  problem?: string[]
+  /** Plain-words steps Claude will take (1-8); `flow` stays the function-level call graph. */
+  steps?: string[]
+  /** Code that will be touched (1-10). */
+  code?: CodeTouch[]
   /** At most 10. */
   minutes: number
   status: CubeStatus

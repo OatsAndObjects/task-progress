@@ -20,7 +20,8 @@ import {
   registerDashboard,
 } from './dashboard'
 import { parseBudget } from './dashboard-model'
-import { buildBoard, gateCheck, topoOrder } from './cubes-model'
+import { PANE_ID, hasUnfinished, onCubesPaneClose, openCubesPane, renderCubesPane } from './cubes-pane'
+import { buildBoard, checkDescribed, gateCheck, normalizeCube, topoOrder } from './cubes-model'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
 
 const PLUGIN = 'task-progress'
@@ -63,14 +64,23 @@ const PROMPT = [
 
 const ORCH_PROMPT = [
   'Orchestrator mode (task-progress): you plan and delegate; Sonnet executors do the work.',
-  '1) For every new user prompt call TaskInputs first (empty inputs if nothing is needed); if it lists questions, ask them in ONE AskUserQuestion before anything else.',
-  '2) Break the task into steps and call TaskPlan (task, steps with minutes).',
-  `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt whose first line is "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
-  '4) Do not edit code or run builds yourself; review reports, re-plan, update TaskProgress. If an executor ran out of time, re-dispatch the rest with a new budget.',
-  'Multi-action tasks: TaskPlan `cubes` (id,title,action,flow 2-6 steps {file,fn,does,calls?} down to functions (non-code: file "shell", fn the command),after,doneWhen,details,minutes<=10), then STOP: the user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Changes: CubeRevise.',
+  '1) Each new user prompt: call TaskInputs first (empty inputs if none); ask any listed questions in ONE AskUserQuestion.',
+  '2) Call TaskPlan (task, steps with minutes).',
+  `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt starting "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
+  '4) Never edit code or build yourself; review reports, re-plan, update TaskProgress; re-dispatch unfinished work with a new budget.',
+  'Multi-action tasks: first ask the approach in one AskUserQuestion (header "Approach", 2-3 options + trade-offs, one Recommended; may share the TaskInputs call). Then TaskPlan `cubes` (id,title,action,summary,problem[],steps[],code[{file,change}],flow 2-6 {file,fn,does,calls?} (non-code: file "shell"),after,doneWhen,minutes<=10), then STOP: the user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Edits: CubeRevise.',
   'Each cube ends with a review: after its executor reports, dispatch one (tag "review: <id>", not cubes:) running Skill "pr-reviewer" on its changed files, then CubeReview; fix P0/P1 before done.',
-  'Full protocol: skill task-progress:orchestrate. Executor agents ignore this section.',
+  'Protocol: skill task-progress:orchestrate. Executors ignore this.',
 ].join(' ')
+
+const APPROACH_DENY =
+  'Ask the user how to solve this first: one AskUserQuestion with a question whose header is "Approach", briefly stating the problem and offering 2-3 ways to solve it (trade-off each, one marked (Recommended)). Then call TaskPlan.'
+
+/** True when an AskUserQuestion call has a question whose header is "Approach" (case-insensitive, trimmed). */
+export function hasApproachQuestion(e: any): boolean {
+  const qs: any[] = Array.isArray(e?.questions) ? e.questions : []
+  return qs.some(q => typeof q?.header === 'string' && q.header.trim().toLowerCase() === 'approach')
+}
 
 const FLOW_STEP_SCHEMA = {
   type: 'object',
@@ -83,6 +93,15 @@ const FLOW_STEP_SCHEMA = {
   required: ['file', 'fn', 'does'],
 }
 
+const CODE_TOUCH_SCHEMA = {
+  type: 'object',
+  properties: {
+    file: { type: 'string', description: "Repo-relative path, optionally ' › function'." },
+    change: { type: 'string', description: 'Short plain description of what changes there.' },
+  },
+  required: ['file', 'change'],
+}
+
 const CUBE_SCHEMA = {
   type: 'object',
   properties: {
@@ -93,10 +112,13 @@ const CUBE_SCHEMA = {
     after: { type: 'array', items: { type: 'string' }, description: 'Ids of cubes that must be done first.' },
     doneWhen: { type: 'string', description: 'A verifiable check that proves the cube is done.' },
     files: { type: 'array', items: { type: 'string' } },
-    details: { type: 'string', description: 'A descriptive paragraph in plain words: what this cube does, why, which files/functions it touches, and the risks or things to check. 2-6 sentences.' },
+    summary: { type: 'string', description: '1-2 plain sentences: what this cube does and why.' },
+    problem: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6, description: 'Points: exactly what problem this cube solves.' },
+    steps: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8, description: 'Plain-words steps you will take, in order.' },
+    code: { type: 'array', items: CODE_TOUCH_SCHEMA, minItems: 1, maxItems: 10, description: "Code that will be touched: {file (path, optionally ' › function'), change (what changes there, plain words)}" },
     minutes: { type: 'number', minimum: 0.5, maximum: 10 },
   },
-  required: ['id', 'title', 'action', 'flow', 'doneWhen', 'minutes'],
+  required: ['id', 'title', 'action', 'summary', 'problem', 'steps', 'code', 'flow', 'doneWhen', 'minutes'],
 }
 
 const progressRef = { plugin: 'task-progress', key: 'progress' } as const
@@ -104,9 +126,13 @@ const hiddenRef = { plugin: 'task-progress', key: 'hidden' } as const
 const frameRef = { plugin: 'task-progress', key: 'frame' } as const
 const modeRef = { plugin: 'task-progress', key: 'mode' } as const
 const checkedRef = { plugin: 'task-progress', key: 'inputsChecked' } as const
+/** True once the main session asked an AskUserQuestion with header "Approach" for this user prompt. */
+const approachRef = { plugin: 'task-progress', key: 'approachAsked' } as const
 const planRef = { plugin: 'task-progress', key: 'plan' } as const
 const runsRef = { plugin: 'task-progress', key: 'runs' } as const
 const pendingRef = { plugin: 'task-progress', key: 'pending' } as const
+/** True once the person closed the cube pane; cleared by the next new plan. */
+const closedRef = { plugin: 'task-progress', key: 'cubesPaneClosed' } as const
 
 export function bar(percent: number): string {
   const filled = Math.max(0, Math.min(BAR_CELLS, Math.round((percent / 100) * BAR_CELLS)))
@@ -542,7 +568,7 @@ export const register: Register = on => {
             type: 'array',
             items: CUBE_SCHEMA,
             description:
-              'Atomic approval cubes; preferred over steps. The user approves each before it runs. Break every cube down to functions: each flow step names the file and function, what it does, and which function it calls next; non-code steps use file "shell" and the command as fn. Always fill `details`: a plain-words paragraph (what, why, what it touches, risks). Every cube ends with a PR review (pr-reviewer skill, then CubeReview).',
+              'Atomic approval cubes; preferred over steps. The user approves each before it runs. Break every cube down to functions: each flow step names the file and function, what it does, and which function it calls next; non-code steps use file "shell" and the command as fn. Every cube needs summary, problem points, plain-words steps and the code it touches. Ask the user the approach first (AskUserQuestion, header "Approach"). Every cube ends with a PR review (pr-reviewer skill, then CubeReview).',
           },
         },
         required: ['task'],
@@ -563,7 +589,10 @@ export const register: Register = on => {
           after: { type: 'array', items: { type: 'string' } },
           doneWhen: { type: 'string' },
           files: { type: 'array', items: { type: 'string' } },
-          details: { type: 'string', description: 'A descriptive paragraph in plain words: what this cube does, why, which files/functions it touches, and the risks or things to check. 2-6 sentences.' },
+          summary: { type: 'string', description: '1-2 plain sentences: what this cube does and why.' },
+          problem: { type: 'array', items: { type: 'string' }, description: 'Points: exactly what problem this cube solves.' },
+          steps: { type: 'array', items: { type: 'string' }, description: 'Plain-words steps you will take, in order.' },
+          code: { type: 'array', items: CODE_TOUCH_SCHEMA, description: "Code that will be touched: {file (path, optionally ' › function'), change (what changes there, plain words)}" },
           minutes: { type: 'number' },
           splitInto: { type: 'array', items: CUBE_SCHEMA },
         },
@@ -628,7 +657,7 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'tp-cubes',
-        description: 'Approval cubes: /tp-cubes on | off | status',
+        description: 'Approval cubes: /tp-cubes [panel] | on | off | status',
       })
     } catch {
       // never let a command refusal keep the tools from registering
@@ -664,6 +693,16 @@ export const register: Register = on => {
     stopTicker(c)
     if (value && !value.isDone) startTicker($, c)
     await quiet(onSessionStart($, e))
+    // The cube panel opens by itself while unfinished cubes are stored, unless the person closed it.
+    if (!(await $.state.get(closedRef)).value) {
+      let b = null
+      try {
+        b = await dashGetCubes($)
+      } catch {
+        // no board
+      }
+      if (hasUnfinished(b)) await openCubesPane($)
+    }
     return next(e)
   })
 
@@ -681,6 +720,9 @@ export const register: Register = on => {
   on('tool.call', { tool: PLAN_TOOL }, async ($, e, next) => {
     const rawCubes: any[] = Array.isArray(e.cubes) ? e.cubes : []
     if (rawCubes.length > 0) {
+      if (!(await $.state.get(approachRef)).value) return { result: `plan not recorded: ${APPROACH_DENY}` }
+      const undescribed = checkDescribed(rawCubes.map((r, i) => normalizeCube(r, `c${i + 1}`)))
+      if (undescribed) return { result: `plan not recorded: ${undescribed}` }
       const task = (String(e.task ?? '').trim() || 'Task').slice(0, 40)
       const built = buildBoard(task, rawCubes, await dashCubesGate($))
       if ('error' in built) return { result: `plan not recorded: ${built.error}` }
@@ -689,6 +731,8 @@ export const register: Register = on => {
       const total = steps.reduce((n, st) => n + st.minutes, 0)
       await $.state.set(planRef, { task, steps, createdAt: await $.clock.now() })
       await quiet(dashSetCubes($, board))
+      await $.state.set(closedRef, false) // a new plan reopens a pane the person closed
+      await openCubesPane($)
       await applyProgress($, c, { task, totalSteps: steps.length, step: 0, label: `${steps.length} cubes · ~${Math.round(total)} min`, done: false })
       try {
         $.ui.toast(`${steps.length} cubes waiting for approval — /tp-dashboard web`)
@@ -755,14 +799,24 @@ export const register: Register = on => {
       await dashSetCubesGate($, a === 'on')
       return { text: `Approval cubes ${a}.` }
     }
-    if (a === '' || a === 'status') {
+    if (a === '' || a === 'panel') {
+      // Asked open: the person's command places it at any width.
+      await $.state.set(closedRef, false)
+      try {
+        await $.ui.open({ id: PANE_ID, title: 'Cubes', columns: 44 })
+      } catch {
+        return { text: 'No panel available here; /tp-cubes status shows the board.' }
+      }
+      return { text: 'Cubes panel open.' }
+    }
+    if (a === 'status') {
       const b = await dashGetCubes($)
       const gate = (await dashCubesGate($)) ? 'on' : 'off'
       if (!b) return { text: `Approval cubes ${gate} · no cube board` }
       const n = (st: string) => b.cubes.filter(x => x.status === st).length
       return { text: `Approval cubes ${gate} · ${b.cubes.length} cubes: ${n('proposed')} waiting, ${n('approved') + n('queued')} approved, ${n('running')} running, ${n('reviewing')} in review, ${n('done')} done` }
     }
-    return { text: 'Usage: /tp-cubes on | off | status' }
+    return { text: 'Usage: /tp-cubes [panel] | on | off | status' }
   })
 
   on('tool.call', { tool: INPUTS_TOOL }, async ($, e, next) => {
@@ -783,7 +837,10 @@ export const register: Register = on => {
 
   // A new user prompt reopens the input gate. Slash commands and injected rows do not.
   on('prompt.submit', async ($, e, next) => {
-    if (!e.command && !e.isMeta) await $.state.set(checkedRef, false)
+    if (!e.command && !e.isMeta) {
+      await $.state.set(checkedRef, false)
+      await $.state.set(approachRef, false)
+    }
     await quiet(onPromptSubmit($, e))
     // Fallback: when another plugin bypasses prompt.compose, the rules ride with the prompt.
     if (!e.command && !e.isMeta && !c.composeSeen) {
@@ -796,7 +853,7 @@ export const register: Register = on => {
           PROMPT
         c.rulesSent = true
       } else if (orch) {
-        text = 'task-progress orchestrator on: TaskInputs first, then TaskPlan, then executors with "[budget: <N>m step: <k>]".'
+        text = 'task-progress orchestrator on: TaskInputs first, then (for cubes) the Approach question, then TaskPlan, then executors with "[budget: <N>m step: <k>]".'
       }
       if (text) return next({ ...e, context: [...(e.context ?? []), text] })
     }
@@ -860,6 +917,8 @@ export const register: Register = on => {
   // The enforcement hook: input gate and dispatch budget for the main session, time
   // budget for sub-agents. Plugin tools answer in their own hooks above.
   on('tool.call', async ($, e, next) => {
+    // The Approach question counts only from the main session (sub-agent calls carry an agentId).
+    if (e.tool === 'AskUserQuestion' && !e.agentId && hasApproachQuestion(e)) await $.state.set(approachRef, true)
     const d = await gateDecision($, e, next.origin?.plugin === PLUGIN, c)
     let out: any
     if (d.deny !== undefined) {
@@ -890,6 +949,10 @@ export const register: Register = on => {
     }
     return { text: 'Usage: /progress  ·  /progress clear' }
   })
+
+  // The cube pane: drawn from the stored board; a person's close is remembered until the next new plan.
+  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => renderCubesPane($, e))
+  on('ui.close', { id: PANE_ID }, async ($, e, next) => onCubesPaneClose($, e, next))
 
   on('command.run', { command: 'orchestrate' }, orchestrateCommand)
   on('command.run', { command: 'tp-orchestrate' }, orchestrateCommand)

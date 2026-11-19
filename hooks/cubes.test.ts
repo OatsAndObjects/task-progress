@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { addThreadMessage, answerCube, applyReview, buildBoard, checkAtomic, computeLanes, finishAndRelease, flowLabel, gateCheck, normalizeBoardFlow, normalizeCube, reviewCubeResult, reviseCube, runCubeCommand, topoOrder } from './cubes-model'
+import { addThreadMessage, answerCube, checkDescribed, applyReview, buildBoard, checkAtomic, computeLanes, finishAndRelease, flowLabel, gateCheck, missingDescribed, normalizeBoardFlow, normalizeCube, reviewCubeResult, reviseCube, runCubeCommand, topoOrder } from './cubes-model'
 import { commandFromLine, parseBudget } from './dashboard-model'
 
 const st = (n: string, extra: any = {}) => ({ file: `${n}.ts`, fn: `${n}Fn`, does: `does ${n}`, ...extra })
@@ -13,6 +13,10 @@ const ok = (id: string, after: string[] = [], extra: any = {}) => ({
   flow: FL2,
   after,
   doneWhen: 'tests pass',
+  summary: 'Does one thing.',
+  problem: ['It is broken'],
+  steps: ['Edit the file'],
+  code: [{ file: 'a.ts › a', change: 'fix it' }],
   minutes: 5,
   ...extra,
 })
@@ -548,4 +552,46 @@ test('a release while a turn runs is handed to submit, which queues it for the i
   expect(g.st('c2')).toBe('approved')
   expect(g.prompts.filter(p => p.includes('approved cube c2')).length).toBe(1)
   expect(calls).toBe(3)
+})
+
+test('describing fields: normalized, capped, empty dropped', () => {
+  const n = normalizeCube(
+    ok('c1', [], {
+      summary: '  ' + 'x'.repeat(400),
+      problem: ['  a  ', '', 'b'.repeat(300), '3', '4', '5', '6', '7'],
+      steps: Array.from({ length: 12 }, (_, i) => `s${i}`),
+      code: [{ file: ' f.ts ', change: ' c ' }, { file: '', change: '' }, ...Array.from({ length: 12 }, (_, i) => ({ file: `f${i}`, change: 'x'.repeat(300) }))],
+    }),
+  )
+  expect(n.summary!.length).toBe(300)
+  expect(n.problem!.length).toBe(6)
+  expect(n.problem![0]).toBe('a')
+  expect(n.problem![1]!.length).toBe(200)
+  expect(n.steps!.length).toBe(8)
+  expect(n.code!.length).toBe(10)
+  expect(n.code![0]).toEqual({ file: 'f.ts', change: 'c' })
+  expect(n.code![1]!.change.length).toBe(200)
+  const e = normalizeCube(ok('c1', [], { summary: ' ', problem: ['', ' '], steps: [], code: [{ file: '', change: '' }] }))
+  for (const k of ['summary', 'problem', 'steps', 'code']) expect(k in e).toBe(false)
+  expect(missingDescribed(e)).toEqual(['summary', 'problem', 'steps', 'code'])
+  expect(missingDescribed(normalizeCube(ok('c1', [], { code: [{ file: 'a.ts', change: '' }] })))).toEqual(['code'])
+  expect(checkDescribed([normalizeCube(ok('c1')), normalizeCube(ok('c2', [], { steps: [] }))])).toContain('cube c2 is missing steps')
+  expect(checkDescribed([normalizeCube(ok('c1'))])).toBeNull()
+})
+
+test('edit patch replaces a describing field wholesale; no patch keeps it', () => {
+  const r: any = buildBoard('T', [ok('c1')], true)
+  const kept: any = reviseCube(r.board, { id: 'c1', title: 'new' })
+  expect(kept.board.cubes[0].problem).toEqual(['It is broken'])
+  expect(kept.board.cubes[0].code).toEqual([{ file: 'a.ts › a', change: 'fix it' }])
+  const upd: any = reviseCube(r.board, { id: 'c1', problem: ['p1', 'p2'], summary: 'New one.', code: [{ file: 'z.ts', change: 'zap' }] })
+  const c = upd.board.cubes[0]
+  expect(c.problem).toEqual(['p1', 'p2'])
+  expect(c.summary).toBe('New one.')
+  expect(c.code).toEqual([{ file: 'z.ts', change: 'zap' }])
+  expect(c.steps).toEqual(['Edit the file'])
+  const cleared: any = reviseCube(r.board, { id: 'c1', steps: [] })
+  expect('steps' in cleared.board.cubes[0]).toBe(false)
+  const split: any = reviseCube(r.board, { id: 'c1', splitInto: [ok('c1', [], { summary: '' }), ok('c1-2')] })
+  expect(split.error).toContain('cube c1 is missing summary')
 })

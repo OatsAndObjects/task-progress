@@ -46,7 +46,6 @@ type Web = {
   port: number
   url: string
   stream: any
-  heartbeat?: { cancel: () => void }
 }
 
 type DashCtx = {
@@ -213,7 +212,7 @@ function deps($: any, nowMs: number): CommandDeps {
 }
 
 /** One command from the web app. */
-async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandResult> {
+export async function command($: any, cmd: DashboardCommand): Promise<DashboardCommandResult> {
   await load($)
   return runCommand(cmd, deps($, await $.clock.now()))
 }
@@ -282,10 +281,11 @@ async function openBrowser($: any, url: string) {
   }
 }
 
-// Session start: the web dashboard starts with Claude Code and opens once per session.
-async function autoStartWeb($: any) {
+// Session start: the web dashboard is OFF by default. It starts (and opens once per session)
+// only when the user turned it on with `/tp-dashboard auto on`.
+export async function autoStartWeb($: any) {
   try {
-    if ((await $.store.get('autoOpen')) === false) return
+    if ((await $.store.get('autoOpen')) !== true) return
     if (c.web || c.starting || openState.opened) return
     const already = await openedThisSession($)
     if (already) openState.opened = true
@@ -310,10 +310,158 @@ async function postResult($: any, w: Web, id: string, r: DashboardCommandResult)
   }
 }
 
-function startWeb($: any): Promise<Web | null> {
+const webSessionRef = { plugin: 'task-progress', key: 'webSession' } as const
+
+/** One token and a preferred port for the whole Claude Code session; $.state survives /reload-plugins. Never throws. */
+export async function sessionWeb($: any): Promise<{ sessionId: string; token: string; port: number }> {
+  let sessionId = ''
+  try {
+    sessionId = String((await $.session.id()) ?? '')
+    const { value } = await $.state.get(webSessionRef)
+    if (value && value.sessionId === sessionId && value.token && Number(value.port) > 0) {
+      return { sessionId, token: String(value.token), port: Number(value.port) }
+    }
+  } catch {
+    // fall through to a fresh record
+  }
+  const fresh = { sessionId, token: randomToken(), port: WEB_PORT }
+  try {
+    await $.state.set(webSessionRef, fresh)
+  } catch {
+    // kept only for this start
+  }
+  return fresh
+}
+
+// ---- restart after the server exits ------------------------------------
+
+const webHeartbeatRef = { plugin: 'task-progress', key: 'webHeartbeat' } as const
+const webLastExitRef = { plugin: 'task-progress', key: 'webLastExit' } as const
+const webStoppedRef = { plugin: 'task-progress', key: 'webStopped' } as const
+const RESTART_DELAYS_MS = [1000, 2000, 4000, 8000, 16000]
+const RESTART_MAX = 5
+const RESTART_WINDOW_MS = 60_000
+const restart = { attempt: 0, times: [] as number[], timer: null as any }
+
+// Backoff goes back to 1 s once a server reaches 'ready' (it bound a port).
+// The 5-in-60-s cap is kept, so a server that starts and dies at once still gives up.
+export function resetRestartBackoff(): void {
+  restart.attempt = 0
+}
+
+// A manual start gives the cap a clean slate.
+export function resetRestarts(): void {
+  restart.attempt = 0
+  restart.times = []
+  try {
+    restart.timer?.cancel?.()
+  } catch {
+    // already gone
+  }
+  restart.timer = null
+}
+
+async function stoppedByUser($: any): Promise<boolean> {
+  try {
+    const { value } = await $.state.get(webStoppedRef)
+    return value != null && value === (await $.session.id())
+  } catch {
+    return false
+  }
+}
+
+
+// ---- heartbeat: a chain of single `after` timers (a refused `every` period ends it for good) ----
+const hb: { timer: { cancel: () => void } | null; lastTickAt: number; armedAt: number; gen: number } = {
+  timer: null,
+  lastTickAt: 0,
+  armedAt: 0,
+  gen: 0,
+}
+
+function cancelHeartbeat(): void {
+  hb.gen++
+  try {
+    hb.timer?.cancel()
+  } catch {
+    // already gone
+  }
+  hb.timer = null
+}
+
+export async function armHeartbeat($: any): Promise<void> {
+  cancelHeartbeat()
+  const gen = hb.gen
+  hb.armedAt = Number(await $.clock.now())
+  if (gen !== hb.gen) return
+  hb.timer = $.clock.after(HEARTBEAT_MS, async () => {
+    if (gen !== hb.gen) return
+    hb.timer = null
+    if (!c.web) return
+    try {
+      hb.lastTickAt = Number(await $.clock.now())
+    } catch {
+      // keep the old stamp
+    }
+    void postSnapshot($)
+    await armHeartbeat($)
+  })
+}
+
+/** A watchdog, called from frequent hooks: a dropped timer is noticed, counted, and replaced. Never throws. */
+export async function kickHeartbeat($: any): Promise<void> {
+  try {
+    if (!c.web) return
+    const now = Number(await $.clock.now())
+    const stale = hb.timer !== null && now - Math.max(hb.lastTickAt, hb.armedAt) > HEARTBEAT_MS * 2
+    if (hb.timer !== null && !stale) return
+    if (stale) {
+      try {
+        const { value } = await $.state.get(webHeartbeatRef)
+        await $.state.set(webHeartbeatRef, { missedTicks: Number(value?.missedTicks ?? 0) + 1, lastMissAt: now })
+      } catch {
+        // evidence is best effort
+      }
+    }
+    void postSnapshot($)
+    await armHeartbeat($)
+  } catch {
+    // a watchdog must never break a hook
+  }
+}
+
+// Start the server again after it exited. One timer at a time; gives up past the cap.
+export async function scheduleRestart($: any): Promise<void> {
+  if (restart.timer) return
+  if (await stoppedByUser($)) return
+  if (restart.timer) return
+  const now = Number(await $.clock.now())
+  restart.times = restart.times.filter(t => now - t < RESTART_WINDOW_MS)
+  if (restart.times.length >= RESTART_MAX) {
+    try {
+      $.ui.toast('task-progress: dashboard server keeps stopping; run /tp-dashboard web to retry')
+    } catch {
+      // best effort
+    }
+    return
+  }
+  restart.times.push(now)
+  const delay = RESTART_DELAYS_MS[Math.min(restart.attempt, RESTART_DELAYS_MS.length - 1)]
+  restart.attempt++
+  restart.timer = $.clock.after(delay, async () => {
+    restart.timer = null
+    try {
+      if (c.web || (await stoppedByUser($))) return
+      await startWeb($)
+    } catch {
+      // the next exit schedules again
+    }
+  })
+}
+
+export function startWeb($: any): Promise<Web | null> {
   if (c.web) return Promise.resolve(c.web)
   if (c.starting) return c.starting
-  const token = randomToken()
   c.starting = new Promise<Web | null>(resolve => {
     let isSettled = false
     const settle = (w: Web | null) => {
@@ -326,9 +474,12 @@ function startWeb($: any): Promise<Web | null> {
     void (async () => {
       let stream: any
       let web: Web | null = null
+      let token = ''
       try {
+        const sw = await sessionWeb($)
+        token = sw.token
         stream = $.process.spawn({
-          argv: ['node', `${$.plugin.root}/web/server.js`, '--port', String(WEB_PORT), '--token', token],
+          argv: ['node', `${$.plugin.root}/web/server.js`, '--port', String(sw.port), '--token', token],
         })
         let buf = ''
         for await (const chunk of stream) {
@@ -349,13 +500,27 @@ function startWeb($: any): Promise<Web | null> {
               const port = Number(msg.port)
               web = { token, port, url: `http://127.0.0.1:${port}/?t=${token}`, stream }
               c.web = web
+              resetRestartBackoff()
               timer.cancel()
               // A heartbeat: the snapshot again every 10 s, so the server can tell the session lives.
-              web.heartbeat = $.clock.every(HEARTBEAT_MS, () => void postSnapshot($))
+              await armHeartbeat($)
               await $.state.set(webRef, { port, url: web.url })
+              try {
+                await $.state.set(webSessionRef, { sessionId: sw.sessionId, token, port })
+              } catch {
+                // the next start asks for the old port
+              }
               await load($)
               void postSnapshot($)
               settle(web)
+            } else if (msg?.type === 'exit') {
+              const reason = String(msg.reason ?? 'unknown')
+              try {
+                await $.state.set(webLastExitRef, { reason, at: Number(msg.at) || Date.now() })
+              } catch {
+                // best effort
+              }
+              $.ui.log(`task-progress web stopped: ${reason}`, { to: 'debug' })
             } else if (msg?.type === 'command' && web) {
               // The command's own id goes back with the result; the target id is args.id.
               const { commandId, cmd } = commandFromLine(msg)
@@ -369,7 +534,7 @@ function startWeb($: any): Promise<Web | null> {
       }
       // The child exited (or could not start).
       timer.cancel()
-      web?.heartbeat?.cancel()
+      cancelHeartbeat()
       if (c.web && c.web.token === token) c.web = null
       try {
         await $.state.set(webRef, null)
@@ -377,6 +542,7 @@ function startWeb($: any): Promise<Web | null> {
         // a render may be drawing; the next start writes it again
       }
       settle(null)
+      void scheduleRestart($)
     })()
   })
   return c.starting
@@ -386,7 +552,7 @@ async function stopWeb($: any): Promise<boolean> {
   const w = c.web
   if (!w) return false
   c.web = null
-  w.heartbeat?.cancel()
+  cancelHeartbeat()
   try {
     await w.stream?.return?.()
   } catch {
@@ -410,7 +576,21 @@ export async function onSessionStart($: any, e: any) {
   } catch {
     // older hosts
   }
-  c.snap = emptySnapshot({ id, cwd: String(e.cwd ?? ''), startedAt: now }, await isOrchestrateOn($), [])
+  c.snap = emptySnapshot({ id, cwd: String(e.cwd ?? ''), startedAt: now }, await isOrchestrateOn($))
+  // Resuming the same session (claude --continue / --resume) keeps the stored board, unfinished cubes
+  // included, so register.tsx can reopen the cubes pane. Same id or source resume/compact keeps it;
+  // /clear and a brand-new session id reset it.
+  const source = String(e.source ?? '')
+  try {
+    const stored: any = (await $.state.get(snapRef)).value
+    const sameSession = id !== '' && stored?.session?.id === id
+    if (stored?.cubes && source !== 'clear' && (sameSession || source === 'resume' || source === 'compact')) {
+      c.snap = { ...c.snap, cubes: normalizeBoardFlow(stored.cubes) }
+      ctx.fired = allCubesDone(c.snap.cubes) // a finished plan must not fire again
+    }
+  } catch {
+    // unreadable store: start empty
+  }
   await $.state.set(snapRef, c.snap)
   await $.state.set(webRef, c.web ? { port: c.web.port, url: c.web.url } : null)
   syncPoll($)
@@ -431,6 +611,7 @@ export async function dashUsage($: any, e: any) {
 
 // Every tool call: the biggest tool results (usage screen).
 export async function onToolCall($: any, e: any, out: any) {
+  void kickHeartbeat($)
   {
     const now: number = await $.clock.now()
     const tool = String(e.tool)
@@ -479,6 +660,7 @@ export async function onAgentSpawn($: any, e: any, out: any) {
 }
 
 export async function onTurnComplete($: any, e: any) {
+  void kickHeartbeat($)
   if (e.usage) {
     const at: number = await $.clock.now()
     await mutate($, s => attributeTurn(addTurnUsage(s, e.usage, at), { agentId: e.agentId, model: e.usage?.model, usage: e.usage }))
@@ -506,6 +688,7 @@ export async function onTurnComplete($: any, e: any) {
 
 // Background agents end with a task notification.
 export async function onPromptSubmit($: any, e: any) {
+  void kickHeartbeat($)
   if (e.origin?.kind === 'task-notification' && typeof e.text === 'string') {
     const n = parseTaskNotification(e.text)
     if (n) {
@@ -517,23 +700,55 @@ export async function onPromptSubmit($: any, e: any) {
   }
 }
 
+async function lastStopLine($: any): Promise<string> {
+  try {
+    const { value } = await $.state.get(webLastExitRef)
+    if (!value?.reason) return ''
+    return `\nlast stop: ${value.reason} at ${new Date(Number(value.at) || Date.now()).toLocaleTimeString('en-GB')}`
+  } catch {
+    return ''
+  }
+}
+
 export function registerDashboard(on: any): void {
   on('command.run', { command: 'tp-dashboard' }, async ($: any, e: any) => {
     const arg = String(e.args ?? '').trim().toLowerCase()
     if (arg === 'web') {
+      try {
+        await $.state.set(webStoppedRef, null)
+      } catch {
+        // best effort
+      }
+      resetRestarts()
       const w = await startWeb($)
       if (!w) return { text: 'Dashboard web server did not start (is node on PATH and web/server.js present?).' }
       void openBrowser($, w.url)
-      return { text: `Dashboard web: ${w.url}` }
+      return { text: `Dashboard web: ${w.url}${await lastStopLine($)}` }
     }
     if (arg === 'auto on' || arg === 'auto off') {
       await $.store.set('autoOpen', arg === 'auto on')
-      return { text: `Dashboard auto-start ${arg === 'auto on' ? 'on' : 'off'}.` }
+      return { text: `Dashboard auto-open ${arg === 'auto on' ? 'on' : 'off'}.` }
     }
     if (arg === 'web stop') {
-      return { text: (await stopWeb($)) ? 'Dashboard web server stopped.' : 'Dashboard web server is not running.' }
+      try {
+        await $.state.set(webStoppedRef, await $.session.id())
+      } catch {
+        // best effort
+      }
+      return { text: ((await stopWeb($)) ? 'Dashboard web server stopped.' : 'Dashboard web server is not running.') + (await lastStopLine($)) }
     }
-    return { text: 'Usage: /tp-dashboard web  ·  /tp-dashboard web stop  ·  /tp-dashboard auto on|off' }
+    let auto = false
+    try {
+      auto = (await $.store.get('autoOpen')) === true
+    } catch {
+      // best effort
+    }
+    return {
+      text:
+        'Usage: /tp-dashboard web  ·  /tp-dashboard web stop  ·  /tp-dashboard auto on|off' +
+        `\nauto-open: ${auto ? 'on (turn off: /tp-dashboard auto off)' : 'off (turn on: /tp-dashboard auto on)'}` +
+        (await lastStopLine($)),
+    }
   })
 }
 

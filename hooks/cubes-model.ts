@@ -1,6 +1,6 @@
 // Approval cubes: the pure parts. A task is broken into atomic cubes; the user
 // approves (or changes) each one before it runs. Nothing here touches `$`.
-import type { Cube, CubeBoard, CubeMessage, CubeReview, CubeStatus, DashboardCommand, DashboardCommandResult, FlowStep, ReviewFinding, ReviewQuiz, ReviewVerdict, Snapshot, SnapshotPlanStep } from '../types/index'
+import type { Cube, CubeBoard, CubeMessage, CubeReview, CubeStatus, DashboardCommand, DashboardCommandResult, FlowStep, CodeTouch, ReviewFinding, ReviewQuiz, ReviewVerdict, Snapshot, SnapshotPlanStep } from '../types/index'
 
 export const CUBE_MAX = 40
 export const CUBE_MAX_MINUTES = 10
@@ -28,12 +28,25 @@ export type CubeSpec = {
   files?: string[]
   /** Optional plain-words paragraph: what, why, touches, risks. */
   details?: string
+  /** 1-2 plain sentences: what this cube does and why. */
+  summary?: string
+  /** Points: exactly what problem this cube solves. */
+  problem?: string[]
+  /** Plain-words steps Claude will take. */
+  steps?: string[]
+  /** Code that will be touched. */
+  code?: CodeTouch[]
   minutes: number
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 const strList = (v: unknown) => (Array.isArray(v) ? v.map(x => str(x)).filter(x => x !== '') : [])
 const DETAILS_MAX = 1200
+const SUMMARY_MAX = 300
+const POINT_MAX = 200
+const PROBLEM_MAX = 6
+const STEPS_MAX = 8
+const CODE_MAX = 10
 const FLOW_FILE_MAX = 200
 const FLOW_FN_MAX = 120
 const FLOW_DOES_MAX = 200
@@ -67,6 +80,13 @@ export function flowLabel(f: FlowStep): string {
   return `${base} › ${f.fn}${/[()]/.test(f.fn) ? '' : '()'}`
 }
 
+const pointList = (v: unknown, max: number): string[] => strList(v).map(x => x.slice(0, POINT_MAX)).slice(0, max)
+const codeList = (v: unknown): CodeTouch[] =>
+  (Array.isArray(v) ? v : [])
+    .map((x: any) => ({ file: str(x?.file).slice(0, POINT_MAX), change: str(x?.change).slice(0, POINT_MAX) }))
+    .filter(x => x.file !== '' || x.change !== '')
+    .slice(0, CODE_MAX)
+
 const idList = (v: unknown) => [...new Set(strList(v).map(x => x.toLowerCase()))]
 
 /** Raw tool / command input to a CubeSpec. Missing fields stay empty for the atomic check to name. */
@@ -76,6 +96,10 @@ export function normalizeCube(raw: any, fallbackId = ''): CubeSpec {
   const files = strList(raw?.files)
   const minutes = Number(raw?.minutes)
   const details = str(raw?.details).slice(0, DETAILS_MAX)
+  const summary = str(raw?.summary).slice(0, SUMMARY_MAX)
+  const problem = pointList(raw?.problem, PROBLEM_MAX)
+  const steps = pointList(raw?.steps, STEPS_MAX)
+  const code = codeList(raw?.code)
   return {
     id: (str(raw?.id) || fallbackId).toLowerCase(),
     title: title.slice(0, TITLE_MAX),
@@ -85,8 +109,32 @@ export function normalizeCube(raw: any, fallbackId = ''): CubeSpec {
     doneWhen: str(raw?.doneWhen),
     ...(files.length > 0 ? { files } : {}),
     ...(details ? { details } : {}),
+    ...(summary ? { summary } : {}),
+    ...(problem.length > 0 ? { problem } : {}),
+    ...(steps.length > 0 ? { steps } : {}),
+    ...(code.length > 0 ? { code } : {}),
     minutes: Number.isFinite(minutes) ? minutes : NaN,
   }
+}
+
+/** The describing fields a cube from Claude must carry (summary, problem, steps, code) that are missing or empty. */
+export function missingDescribed(c: CubeSpec): string[] {
+  const out: string[] = []
+  if (!c.summary) out.push('summary')
+  if (!c.problem || c.problem.length === 0) out.push('problem')
+  if (!c.steps || c.steps.length === 0) out.push('steps')
+  if (!c.code || c.code.length === 0 || c.code.some(x => !x.file || !x.change)) out.push('code')
+  return out
+}
+
+/** Refusal text naming each cube that lacks describing fields, or null when all have them. */
+export function checkDescribed(specs: CubeSpec[]): string | null {
+  const bad = specs.map(s => ({ id: s.id, m: missingDescribed(s) })).filter(x => x.m.length > 0)
+  if (bad.length === 0) return null
+  return (
+    bad.map(x => `cube ${x.id || '(no id)'} is missing ${x.m.join(', ')}`).join('; ') +
+    '. Every cube needs summary (1-2 plain sentences), problem (1-6 points on what it solves), steps (1-8 plain-words steps) and code (1-10 {file, change} entries).'
+  )
 }
 
 /** Why a cube is not atomic, or null when it is. */
@@ -249,13 +297,17 @@ const spec = (c: Cube): CubeSpec => ({
   doneWhen: c.doneWhen,
   ...(c.files ? { files: c.files } : {}),
   ...(c.details ? { details: c.details } : {}),
+  ...(c.summary ? { summary: c.summary } : {}),
+  ...(c.problem ? { problem: c.problem } : {}),
+  ...(c.steps ? { steps: c.steps } : {}),
+  ...(c.code ? { code: c.code } : {}),
   minutes: c.minutes,
 })
 
 /** Applies fields from `patch` (only the ones given) to a cube's spec. */
 function patched(c: Cube, patch: any): CubeSpec {
   const merged: any = { ...spec(c) }
-  for (const k of ['title', 'action', 'flow', 'after', 'doneWhen', 'files', 'details', 'minutes']) {
+  for (const k of ['title', 'action', 'flow', 'after', 'doneWhen', 'files', 'details', 'summary', 'problem', 'steps', 'code', 'minutes']) {
     if (patch?.[k] !== undefined) merged[k] = patch[k]
   }
   merged.id = c.id
@@ -284,6 +336,7 @@ export function editCube(board: CubeBoard, id: string, patch: any, by: 'user' | 
   if (!s.files) delete next.files
   // An explicit empty `details` clears it; a patch without `details` keeps the old one.
   if (patch?.details !== undefined && !s.details) delete next.details
+  for (const k of ['summary', 'problem', 'steps', 'code'] as const) if (patch?.[k] !== undefined && !s[k]) delete next[k]
   if (by === 'claude') delete next.note
   return { board: withLanes({ ...board, cubes: board.cubes.map(x => (x.id === id ? next : x)) }) }
 }
@@ -320,6 +373,8 @@ export function reviseCube(board: CubeBoard, input: any): { board: CubeBoard; me
     const r = checkAtomic(s)
     if (r) return { error: r }
   }
+  const undescribed = checkDescribed(specs)
+  if (undescribed) return { error: undescribed }
   const rewired = others.map(o => (o.after.includes(id) ? { ...o, after: [...new Set(o.after.map(a => (a === id ? last : a)))] } : o))
   const pos = board.cubes.findIndex(x => x.id === id)
   const newCubes = specs.map(s => toCube(s, 'claude', s.id === id ? c.version + 1 : 1))
@@ -616,7 +671,7 @@ async function commit(d: CubeDeps, board: CubeBoard, extra: Cube[] = []): Promis
 export function cubeFields(cmd: DashboardCommand): Record<string, unknown> {
   const text = cmd.actionText ?? cmd.cubeAction
   const out: Record<string, unknown> = {}
-  for (const k of ['title', 'flow', 'after', 'doneWhen', 'files', 'details', 'minutes']) if (cmd[k] !== undefined) out[k] = cmd[k]
+  for (const k of ['title', 'flow', 'after', 'doneWhen', 'files', 'details', 'summary', 'problem', 'steps', 'code', 'minutes']) if (cmd[k] !== undefined) out[k] = cmd[k]
   if (text !== undefined) out.action = text
   return out
 }

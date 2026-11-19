@@ -12,11 +12,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 test('server stays up on heartbeats with no tab, exits when they stop', async () => {
   const proc = spawn(process.execPath, [SERVER, '--port', '0', '--token', TOKEN, '--idle-ms', '700'], { stdio: ['ignore', 'pipe', 'ignore'] });
   let exited = false;
+  let out = '';
   proc.on('exit', () => (exited = true));
   const port = await new Promise((resolve) => {
     let buf = '';
     proc.stdout.on('data', (d) => {
       buf += String(d);
+      out += String(d);
       for (const l of buf.split('\n')) {
         try {
           const o = JSON.parse(l);
@@ -33,4 +35,8 @@ test('server stays up on heartbeats with no tab, exits when they stop', async ()
   assert.equal(exited, false, 'alive on heartbeats, no tab');
   await sleep(1500);
   assert.equal(exited, true, 'exits once heartbeats stop');
+  const exitLine = out.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((o) => o && o.type === 'exit');
+  assert.ok(exitLine, 'prints an exit line');
+  assert.equal(exitLine.reason, 'idle');
+  assert.equal(typeof exitLine.at, 'number');
 });
