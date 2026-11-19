@@ -157,5 +157,5 @@ test('pane: pressing Approve, Reject and Approve all runs the real commands', as
   await press('reject-c2')
   expect(toasts.at(-1)).toBe('Rejected c2')
   await press('approve-all')
-  expect(toasts.at(-1)).toBe('Approved all')
+  expect(toasts.at(-1)).toBe('c3 sent to Claude')
 })

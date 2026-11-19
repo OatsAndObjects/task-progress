@@ -21,7 +21,7 @@ export async function runPaneAction($: any, a: PaneAction): Promise<void> {
   try {
     const r = await command($, paneActionToCommand(a))
     text = r.ok
-      ? a.kind === 'approveAll' ? 'Approved all' : `${a.kind === 'approve' ? 'Approved' : 'Rejected'} ${a.id}`
+      ? a.kind === 'approveAll' ? String(r.message || 'Approved all') : `${a.kind === 'approve' ? 'Approved' : 'Rejected'} ${a.id}`
       : String(r.message ?? 'Failed')
   } catch (e: any) {
     text = String(e?.message ?? e ?? 'Failed')

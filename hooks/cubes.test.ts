@@ -102,25 +102,26 @@ test('approve with pending deps queues; finishing the dep releases it in one pro
   expect((await run(g.d, 'cube.approve', { id: 'c2' }))!.ok).toBe(true)
   expect((await run(g.d, 'cube.approve', { id: 'c3' }))!.ok).toBe(true)
   expect(g.st('c2')).toBe('queued')
-  expect(g.prompts.length).toBe(0)
+  // Each queued approval tells Claude once (the bug: nothing was sent).
+  expect(g.prompts.length).toBe(2)
   await run(g.d, 'cube.approve', { id: 'c1' })
-  expect(g.prompts.length).toBe(1)
+  expect(g.prompts.length).toBe(3)
   g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, status: 'running', agentId: 'a1' } : c)) } })
   // The executor finished: c1 waits for its review, so nothing is released yet.
   const none = await finishAndRelease(g.d, 'a1', true)
   expect(none).toEqual([])
   expect(g.st('c1')).toBe('reviewing')
   expect(g.st('c2')).toBe('queued')
-  expect(g.prompts.length).toBe(2)
-  expect(g.prompts[1]).toContain('Cube c1 is in review: dispatch a review executor tagged "[budget: <N>m step: <k> review: c1]" (Skill "pr-reviewer" on its files), then CubeReview.')
+  expect(g.prompts.length).toBe(4)
+  expect(g.prompts[3]).toContain('Cube c1 is in review: dispatch a review executor tagged "[budget: <N>m step: <k> review: c1]" (Skill "pr-reviewer" on its files), then CubeReview.')
   const r = await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
   expect(r.ok).toBe(true)
   expect(g.st('c1')).toBe('done')
   expect(g.cube('c1').review.status).toBe('passed')
   expect(g.st('c2')).toBe('approved')
-  expect(g.prompts.length).toBe(3)
-  expect(g.prompts[2]).toContain('c2')
-  expect(g.prompts[2]).toContain('c3')
+  expect(g.prompts.length).toBe(5)
+  expect(g.prompts[4]).toContain('c2')
+  expect(g.prompts[4]).toContain('c3')
 })
 
 function running(g: any) {
@@ -516,7 +517,7 @@ test('approve names what a waiting cube waits for', async () => {
   const g = rig([ok('c1'), ok('c2', ['c1'])])
   const res: any = await run(g.d, 'cube.approve', { id: 'c2' })
   expect(res.message).toBe('cube c2 approved, not started yet: c2 starts after c1')
-  expect(g.prompts.length).toBe(0)
+  expect(g.prompts.length).toBe(1)
 })
 
 test('waiting cube is released after the dependency review APPROVE and after markDone', async () => {
@@ -594,4 +595,48 @@ test('edit patch replaces a describing field wholesale; no patch keeps it', () =
   expect('steps' in cleared.board.cubes[0]).toBe(false)
   const split: any = reviseCube(r.board, { id: 'c1', splitInto: [ok('c1', [], { summary: '' }), ok('c1-2')] })
   expect(split.error).toContain('cube c1 is missing summary')
+})
+
+// ---- approved cubes queued behind unfinished deps must still tell Claude ----
+const runningC1 = (g: any) => g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, status: 'running', agentId: 'a1' } : c)) } })
+
+test('approveAll with everything queued behind a running cube sends one notice', async () => {
+  const g = rig([ok('c1'), ok('c2', ['c1']), ok('c3', ['c1'])])
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  runningC1(g)
+  g.prompts.length = 0
+  const res: any = await run(g.d, 'cube.approveAll')
+  expect(res.ok).toBe(true)
+  expect(g.prompts.length).toBe(1)
+  const t = g.prompts[0]
+  expect(t).toContain('c2')
+  expect(t).toContain('c3')
+  expect(t).toContain('queued')
+  expect(t).toContain('after c1')
+  expect(t).toContain('do not ask the user to approve them again')
+  expect(t).not.toContain('Execute it now')
+  expect(t).not.toContain('Dispatch it')
+})
+
+test('approve of one queued cube sends a notice', async () => {
+  const g = rig([ok('c1'), ok('c2', ['c1']), ok('c3', ['c1'])])
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  runningC1(g)
+  g.prompts.length = 0
+  await run(g.d, 'cube.approve', { id: 'c2' })
+  expect(g.prompts.length).toBe(1)
+  expect(g.prompts[0]).toContain('c2')
+  expect(g.prompts[0]).toContain('queued')
+  expect(g.prompts[0]).toContain('after c1')
+  expect(g.prompts[0]).not.toContain('Dispatch it')
+})
+
+test('approveAll with a ready cube and a queued one: execute c1, mention c2 queued', async () => {
+  const g = rig([ok('c1'), ok('c2', ['c1'])])
+  await run(g.d, 'cube.approveAll')
+  expect(g.prompts.length).toBe(1)
+  expect(g.prompts[0]).toContain('Execute it now')
+  expect(g.prompts[0]).toContain('c2')
+  expect(g.prompts[0]).toContain('queued')
+  expect(g.prompts[0]).toContain('after c1')
 })

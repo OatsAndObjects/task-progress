@@ -529,16 +529,23 @@ function cubeBrief(board: CubeBoard, c: Cube): string {
 }
 
 /** The prompt that tells the model to run approved cubes. */
-export function approvalPrompt(board: CubeBoard, cubes: Cube[]): string {
+export function approvalPrompt(board: CubeBoard, cubes: Cube[], queued: Cube[] = []): string {
+  const waits = queued.map(c => waitText(board, c.id)).join('; ')
+  const ids = queued.map(c => c.id).join(', ')
+  const one = queued.length === 1
+  if (cubes.length === 0) {
+    return `The user approved cube${one ? '' : 's'} ${ids}. ${one ? 'It is' : 'They are'} queued and start${one ? 's' : ''} automatically (${waits}) — do not ask the user to approve ${one ? 'it' : 'them'} again; nothing to dispatch now.`
+  }
+  const queuedLine = queued.length > 0 ? `\nAlso approved and queued (${waits}): ${ids}. ${one ? 'It starts' : 'They start'} automatically; do not ask the user to approve ${one ? 'it' : 'them'} again.` : ''
   if (cubes.length === 1) {
     const c = cubes[0]!
-    return `The user approved cube ${c.id} — ${c.title}. Execute it now: ${cubeBrief(board, c)}`
+    return `The user approved cube ${c.id} — ${c.title}. Execute it now: ${cubeBrief(board, c)}${queuedLine}`
   }
   const lines = cubes.map(c => `- cube ${c.id} — ${c.title}: ${cubeBrief(board, c)}`)
   return [
     `The user approved ${cubes.length} cubes that are ready to run now. They do not depend on each other, so you may run them in parallel (at most 3 at once):`,
     ...lines,
-  ].join('\n')
+  ].join('\n') + queuedLine
 }
 
 export function changePrompt(c: Cube, note: string): string {
@@ -655,11 +662,12 @@ const fail = (message: string): DashboardCommandResult => ({ ok: false, message 
 const ok = (message: string): DashboardCommandResult => ({ ok: true, message })
 
 /** Puts the board, releases any queued cubes that became ready, and announces them in one prompt. */
-async function commit(d: CubeDeps, board: CubeBoard, extra: Cube[] = []): Promise<Cube[]> {
+async function commit(d: CubeDeps, board: CubeBoard, extra: Cube[] = [], newlyQueued: Cube[] = []): Promise<Cube[]> {
   const r = releaseReady(withLanes(board))
   d.put(withBoard(d.get(), r.board))
   const ready = [...extra, ...r.released.filter(x => !extra.some(e => e.id === x.id))].map(x => r.board.cubes.find(c => c.id === x.id)!)
-  if (ready.length > 0) await d.submit(approvalPrompt(r.board, ready), { keepInputCheck: true })
+  const queued = newlyQueued.map(x => r.board.cubes.find(c => c.id === x.id)).filter((c): c is Cube => !!c && c.status === 'queued')
+  if (ready.length > 0 || queued.length > 0) await d.submit(approvalPrompt(r.board, ready, queued), { keepInputCheck: true })
   return ready
 }
 
@@ -742,23 +750,24 @@ export async function runCubeCommand(cmd: DashboardCommand, d: CubeDeps): Promis
     case 'cube.approve': {
       const r = approveOne(board, id)
       if ('error' in r) return fail(r.error)
-      const ready = await commit(d, r.board, r.isReady ? [r.board.cubes.find(c => c.id === id)!] : [])
+      const me = r.board.cubes.find(c => c.id === id)!
+      const ready = await commit(d, r.board, r.isReady ? [me] : [], r.isReady ? [] : [me])
       return ok(ready.some(c => c.id === id) ? `cube ${id} approved and sent to Claude` : `cube ${id} approved, not started yet: ${waitText(r.board, id)}`)
     }
     case 'cube.approveAll': {
       let b = board
       const ready: Cube[] = []
-      let queued = 0
+      const queuedNew: Cube[] = []
       for (const c of topoOrder(board)) {
         if (c.status !== 'proposed') continue
         const r = approveOne(b, c.id)
         if ('error' in r) continue
         b = r.board
         if (r.isReady) ready.push(b.cubes.find(x => x.id === c.id)!)
-        else queued += 1
+        else queuedNew.push(b.cubes.find(x => x.id === c.id)!)
       }
-      if (ready.length === 0 && queued === 0) return fail('no proposed cubes to approve')
-      const sent = await commit(d, b, ready)
+      if (ready.length === 0 && queuedNew.length === 0) return fail('no proposed cubes to approve')
+      const sent = await commit(d, b, ready, queuedNew)
       const waiting = b.cubes.filter(c => c.status === 'queued').map(c => waitText(b, c.id))
       const sentIds = sent.map(c => c.id).join(', ')
       return ok(`${sentIds || 'nothing'} sent to Claude${waiting.length ? '; ' + waiting.join('; ') : ''}`)

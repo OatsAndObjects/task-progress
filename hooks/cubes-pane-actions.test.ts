@@ -15,9 +15,9 @@ test('buttonsFor: only proposed cubes show Approve and Reject', () => {
   }
 })
 
-function fake(store: Map<string, any>, toasts: string[], prompts: string[]) {
+function fake(store: Map<string, any>, toasts: string[], prompts: string[], sid = 's1') {
   return {
-    session: { id: async () => 's1' },
+    session: { id: async () => sid },
     state: {
       get: async (r: any) => ({ value: store.get(r.key) ?? null }),
       set: async (r: any, v: any) => void store.set(r.key, v),
@@ -31,8 +31,8 @@ function fake(store: Map<string, any>, toasts: string[], prompts: string[]) {
 
 test('runPaneAction toasts on success, then on failure, and never throws', async () => {
   const snap: any = emptySnapshot({ id: '', cwd: '', startedAt: 1 }, true)
-  const cube = (id: string) => ({ id, title: id, action: 'a', flow: [], after: [], doneWhen: 'd', minutes: 1, status: 'proposed' })
-  snap.cubes = { task: 't', gate: true, cubes: [cube('c1')], lanes: [['c1']] }
+  const cube = (id: string, after: string[] = []) => ({ id, title: id, action: 'a', flow: [], after, doneWhen: 'd', minutes: 1, status: 'proposed' })
+  snap.cubes = { task: 't', gate: true, cubes: [cube('c1'), cube('c2', ['c1'])], lanes: [['c1'], ['c2']] }
   const store = new Map<string, any>([['snapshot', snap]])
   const toasts: string[] = []
   const prompts: string[] = []
@@ -42,5 +42,10 @@ test('runPaneAction toasts on success, then on failure, and never throws', async
   await runPaneAction($, { kind: 'reject', id: 'c9' })
   expect(toasts.length).toBe(2)
   expect(toasts[1]).toContain('c9')
+  // The module cache holds the board: c2 waits for c1, and the toast says so (not a fixed "Approved all").
+  await runPaneAction($, { kind: 'approveAll' })
+  expect(toasts.length).toBe(3)
+  expect(toasts[2]).toContain('after c1')
+  expect(toasts[2]).not.toBe('Approved all')
   await runPaneAction({ ui: { toast() { throw new Error('x') } } } as any, { kind: 'approveAll' })
 })

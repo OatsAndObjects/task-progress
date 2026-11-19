@@ -1,6 +1,6 @@
 # task-progress
 
-A Claude Code plugin (v1.3.0). It shows an estimated progress bar above the prompt, runs an orchestrator mode with small executors, asks you to approve the plan as cubes, and has a small web dashboard with two screens (Cubes and Usage).
+A Claude Code plugin (v1.3.1). It shows an estimated progress bar above the prompt, runs an orchestrator mode with small executors, asks you to approve the plan as cubes, and has a small web dashboard with two screens (Cubes and Usage).
 
 ## Progress bar
 
