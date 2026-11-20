@@ -1,6 +1,6 @@
 # task-progress
 
-A Claude Code plugin (v1.3.1). It shows an estimated progress bar above the prompt, runs an orchestrator mode with small executors, asks you to approve the plan as cubes, and has a small web dashboard with two screens (Cubes and Usage).
+A Claude Code plugin (v1.3.1). It shows an estimated progress bar above the prompt, runs an orchestrator mode with small executors, asks you to approve the plan as cubes, routes work to feature-dev and code-simplifier agents, and has a terminal Cubes pane (agents, cubes, usage).
 
 ## Progress bar
 
@@ -18,11 +18,11 @@ On by default; `/tp-orchestrate on | off | status` (the plugin also ships a skil
 
 ## Approval cubes
 
-For a multi-action task, Claude calls `TaskPlan` with `cubes` and stops. Each cube is one small, checkable piece of work; nothing runs until you approve it. Approve, edit and the other actions are done on the web dashboard (Cubes screen).
+For a multi-action task, Claude calls `TaskPlan` with `cubes` and stops. Each cube is one small, checkable piece of work; nothing runs until you approve it. Approve, edit and the other actions are done in the Cubes pane (`/tp-cubes`).
 
 **A cube** has an `id` (c1, c2, ...), a `title`, one `action` sentence, a `flow` of 2-6 function-level steps, `after` (cubes that must finish first), `doneWhen` (a check that proves it is done), optional `files`, and `minutes` (at most 10). The cubes form a graph; the progress bar mirrors it, one step per cube.
 
-**Description sections.** Every cube also carries `summary` (one or two plain sentences), `problem` (list of bullets), `steps` (ordered list of plain steps) and `code` (list of `{file, change}`: the file or `file › function` and what changes there). All four are required. The card's expandable body and the drawer show them as Summary, Problem, Steps and Code touched, then Done when, the flow and the review. Older cubes with only `details` show it as the Summary.
+**Description sections.** Every cube also carries `summary` (one or two plain sentences), `problem` (list of bullets), `steps` (ordered list of plain steps) and `code` (list of `{file, change}`: the file or `file › function` and what changes there). All four are required. The card's expandable body (Details) shows them as Summary, Problem, Steps and Code touched, then Done when, the flow and the review. Older cubes with only `details` show it as the Summary.
 
 **Approach question gate.** `TaskPlan` with cubes is refused until Claude has called `AskUserQuestion` with a question whose header is "Approach" for the current prompt (it offers the ways to do the task and you pick one). The flag resets on every new prompt.
 
@@ -38,35 +38,28 @@ For a multi-action task, Claude calls `TaskPlan` with `cubes` and stops. Each cu
 
 **Dispatch gate.** While orchestrator mode and the gate are on, an Agent dispatch must tag the cubes it runs, `[budget: 6m step: 2 cubes: c3]`. A dispatch for an unapproved, unknown or still-waiting cube is denied; an untagged dispatch is denied while the board has open work.
 
-**PR review stage.** Every cube ends with a review: an executor runs the `pr-reviewer` skill and calls `CubeReview` (`verdict` APPROVE / REQUEST_CHANGES / NEEDS_INVESTIGATION, `summary`, `findings` P0-P3, `quiz`). With the gate on, a finished cube goes to `reviewing`; APPROVE makes it done and releases dependents; REQUEST_CHANGES reopens it. The review executor is dispatched with `[budget: <N>m step: <k> review: <id>]`. Escape hatch: `cube.markDone`.
+**Combined review.** A cube whose executor finished goes to `reviewing` and no longer blocks its dependents. When every cube is built, one review runs: code-simplifier (only if code changed), then `task-progress:pr-reviewer` and `feature-dev:code-reviewer` in parallel (tag `review: <ids>`), then one `CubeReview` with `ids`. REQUEST_CHANGES reopens only cubes whose files carry P0/P1 findings. Dependents may start while a cube is in review, so a REQUEST_CHANGES fix to an earlier cube can affect later cubes that are already built; the orchestrator should re-check those. Escape hatch: `cube.markDone`.
 
 `/tp-cubes on | off | status` turns the gate on or off for new boards and shows the counts.
 
 
-### Terminal Cubes panel (v1.3.0)
+### Cubes pane
 
-The terminal Cubes panel opens automatically when a cube plan is made, and on resume when cubes are unfinished. In the fullscreen layout it docks beside the transcript from 110 columns; otherwise it sits above the prompt. `/tp-cubes` opens it. Each waiting cube has Approve and Reject, and there is Approve all.
+`/tp-cubes` opens it; it also opens by itself when a plan is made and on resume with unfinished cubes. Docked beside the transcript from 110 columns, otherwise above the prompt. It shows:
 
-The web dashboard is off by default: run `/tp-dashboard auto on` to start it automatically each session, or `/tp-dashboard web` to start it now.
+- **Agents**: running agents, time left, last tool.
+- **Cubes**: each with its summary and a Details toggle (problem, steps, code, done when, flow, review); Approve, Reject and Approve all.
+- **Usage**: 5-hour and 7-day limits and top agents.
 
 ## Auto /context then /clear
 
-When the last cube of a plan finishes, the plugin runs `/context`, saves the output (in `~/.claude/task-progress-context/` and on the dashboard), then runs `/clear`. This happens once per plan.
+When the last cube of a plan finishes, the plugin runs `/context`, saves the output (in `~/.claude/task-progress-context/`), then runs `/clear`. This happens once per plan.
 
-## Web dashboard (Cubes and Usage)
+## Install
 
-- `/tp-dashboard web` starts the local web app (`web/server.js`, needs `node` on PATH) and opens it; `/tp-dashboard web stop` stops it.
-- `/tp-dashboard auto on|off` turns the auto-open on or off. It is off by default: the web dashboard only starts when you run `/tp-dashboard web`, or at session start once you turn auto on (then it opens once per session).
-- **Cubes**: the plan as approval cubes with flow, review and all the actions above.
-- **Usage**: context, 5-hour and weekly limits, cost, tokens, and who used them (by cube, executor, model, biggest tool results).
+    claude plugin marketplace add <path or repo>
+    claude plugin install task-progress@local-mods
 
-The web app binds 127.0.0.1 only; every `/api/*` call needs a random per-session token (wrong token = 401); the Host header is checked (DNS-rebinding guard) and a browser Origin must be the same origin; bodies are capped at 1 MB and commands are validated against a fixed action list. It exits on its own about 35 s after the plugin stops sending snapshots. Details: `web/README.md`. `/?demo=1` renders both screens with sample data.
-
-## Install (local directory marketplace)
-
-Place this folder inside a directory that you add as a local marketplace, then install the plugin from it:
-
-    /plugin marketplace add <path-to-marketplace-directory>
-    /plugin install task-progress@<marketplace-name>
+`feature-dev` and `code-simplifier` come along as dependencies from `claude-plugins-official` (add that marketplace first). Session start warns with the install commands if they are missing. `pr-reviewer` is bundled.
 
 Plugin manifest: `.claude-plugin/plugin.json`. Hook module: `hooks/register.tsx`.

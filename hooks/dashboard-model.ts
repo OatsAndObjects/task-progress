@@ -1,4 +1,4 @@
-// Pure parts of the session dashboard: the snapshot reducers and the command
+﻿// Pure parts of the session dashboard: the snapshot reducers and the command
 // runner. Nothing here touches `$`; dashboard.tsx wires them to the engine.
 import type {
   AgentEntryStatus,
@@ -196,7 +196,7 @@ export function summarize(tool: string, e: Record<string, unknown>): string {
     }
   }
   s = s.replace(/\s+/g, ' ').trim()
-  return s.length > 100 ? s.slice(0, 99) + '…' : s
+  return s.length > 100 ? s.slice(0, 99) + 'â€¦' : s
 }
 
 /** What runCommand needs from the engine. Every effect goes through here, so tests can fake it. */
@@ -217,7 +217,7 @@ const fail = (message: string): DashboardCommandResult => ({ ok: false, message 
 const ok = (message: string): DashboardCommandResult => ({ ok: true, message })
 const strArg = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 
-/** One dashboard command, from the web bridge. Never throws. */
+/** One dashboard command, from the command bridge. Never throws. */
 export async function runCommand(cmd: DashboardCommand, d: CommandDeps): Promise<DashboardCommandResult> {
   try {
     const action = String(cmd?.action ?? '')
@@ -236,26 +236,6 @@ export async function runCommand(cmd: DashboardCommand, d: CommandDeps): Promise
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err))
   }
-}
-
-/**
- * A `command` line from web/server.js: its own `id` is the command id (echoed back in
- * the result); the target id, when the action has one, is `args.id`.
- */
-export function commandFromLine(msg: Record<string, unknown>): { commandId: string; cmd: DashboardCommand } {
-  const { type: _t, id: commandId, args, ...top } = msg as any
-  const a = args && typeof args === 'object' ? args : {}
-  const cmd: DashboardCommand = { ...top, ...a, action: String(msg.action ?? '') }
-  // A cube's own `action` sentence under args would clash with the command name.
-  if (typeof a.action === 'string' && a.action !== cmd.action && cmd.cubeAction === undefined) cmd.cubeAction = a.action
-  return { commandId: String(commandId ?? ''), cmd }
-}
-
-/** Splits a stream of text pieces into whole lines; keeps the unfinished tail. */
-export function splitLines(buffer: string, piece: string): { lines: string[]; rest: string } {
-  const all = (buffer + piece).split(/\r?\n/)
-  const rest = all.pop() ?? ''
-  return { lines: all.filter(l => l.trim() !== ''), rest }
 }
 
 /** 32 random hex characters. */
@@ -314,7 +294,7 @@ export function attributeTurn(s: Snapshot, t: { agentId?: string; model?: string
   }
 }
 
-/** Keeps the 20 biggest tool results (tokens ≈ chars/4 unless given). Never throws. */
+/** Keeps the 20 biggest tool results (tokens â‰ˆ chars/4 unless given). Never throws. */
 export function attributeTool(s: Snapshot, r: { tool: string; target: string; tokens?: number; chars?: number }): Snapshot {
   try {
     const tokens = Math.round(r.tokens ?? (r.chars ?? 0) / 4)

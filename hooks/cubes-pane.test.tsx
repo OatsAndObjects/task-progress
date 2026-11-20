@@ -159,3 +159,49 @@ test('pane: pressing Approve, Reject and Approve all runs the real commands', as
   await press('approve-all')
   expect(toasts.at(-1)).toBe('c3 sent to Claude')
 })
+
+test('rows: closed has summary and no sections; open has Problem, Steps, Code touched, Review', () => {
+  const b = board([cube('c1', 'proposed', { ...DESC, review: { status: 'passed', verdict: 'APPROVE', summary: 'Looks  good', at: 1 } })])
+  const closed = buildCubeRows(b)[1]
+  expect(closed.summary).toBe('Does the thing so it works.')
+  expect(closed.sections).toBeUndefined()
+  expect(closed.open).toBe(false)
+  const open = buildCubeRows(b, ['c1'])[1]
+  expect(open.open).toBe(true)
+  expect(open.sections!.map(s => s.title)).toEqual(['Problem', 'Steps', 'Code touched', 'Review'])
+  expect(open.sections![2].items).toEqual(['a.ts › a › fix it'])
+  expect(open.sections![3].items).toEqual(['APPROVE · Looks good'])
+})
+
+test('rows: legacy details act as summary', () => {
+  expect(buildCubeRows(board([cube('c1', 'proposed', { details: '  old text ' })]))[1].summary).toBe('old text')
+})
+
+test('pane: Details button toggles open state and shows sections', async () => {
+  const { $, buttons } = fakeEnv([cube('c1', 'running', DESC)])
+  expect(keys(await buttons())).toEqual(['details-c1'])
+  const b = (await buttons())[0]
+  expect(b.props.label).toBe('▸ Details')
+  b.onPress({})
+  await settle()
+  expect((await buttons())[0].props.label).toBe('▾ Hide')
+  expect((await $.state.get({ plugin: 'task-progress', key: 'cubesPaneOpen' })).value).toEqual(['c1'])
+})
+
+test('pane: Agents section on top while an agent runs', async () => {
+  const { $ } = fakeEnv([cube('c1', 'running')])
+  const snap: any = await $.state.get({ key: 'snapshot' })
+  await $.state.set({ plugin: 'task-progress', key: 'snapshot' }, { ...snap.value, agents: [{ id: 'a', description: 'build it', type: 'task-progress:executor', status: 'running', startedAt: 0, budgetMin: 5, cube: { id: 'c1', kind: 'build' } }] })
+  const texts: string[] = []
+  const walk = (n: any) => {
+    if (Array.isArray(n)) return n.forEach(walk)
+    if (typeof n === 'string') return void texts.push(n)
+    if (!n || typeof n !== 'object') return
+    walk(n.children)
+  }
+  walk(await renderCubesPane($, {}))
+  const all = texts.join('|')
+  expect(all).toContain('Agents · 1 running')
+  expect(all).toContain('executor')
+  expect(all.indexOf('Agents')).toBeLessThan(all.indexOf('Cubes ·'))
+})

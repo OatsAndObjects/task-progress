@@ -17,9 +17,9 @@ import {
   onSessionStart,
   onToolCall,
   onTurnComplete,
-  registerDashboard,
 } from './dashboard'
 import { parseBudget } from './dashboard-model'
+import { installedNames, missingDeps } from './deps-check'
 import { PANE_ID, hasUnfinished, onCubesPaneClose, openCubesPane, renderCubesPane } from './cubes-pane'
 import { buildBoard, checkDescribed, gateCheck, normalizeCube, topoOrder } from './cubes-model'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
@@ -38,6 +38,14 @@ export const GATED_TOOLS: readonly string[] = ['Edit', 'MultiEdit', 'Write', 'No
 /** Share of the budget after which an executor is told to wrap up. */
 export const WARN_AT = 0.8
 const MAX_PARALLEL = 3
+/** Default agent per role; the orchestrator rules are built from these. */
+export const AGENT_ROLES = {
+  research: 'feature-dev:code-explorer',
+  design: 'feature-dev:code-architect',
+  build: 'task-progress:executor',
+  simplify: { type: 'code-simplifier:code-simplifier', model: 'sonnet' },
+  review: ['task-progress:executor', 'feature-dev:code-reviewer'],
+} as const
 const C_WARN = '#F59E0B'
 const C_OVER = '#F87171'
 const BAR_CELLS = 14
@@ -66,11 +74,12 @@ const ORCH_PROMPT = [
   'Orchestrator mode (task-progress): you plan and delegate; Sonnet executors do the work.',
   '1) Each new user prompt: call TaskInputs first (empty inputs if none); ask any listed questions in ONE AskUserQuestion.',
   '2) Call TaskPlan (task, steps with minutes).',
-  `3) Dispatch each step with Agent subagent_type "task-progress:executor" and a self-contained prompt starting "[budget: <N>m step: <k>]"; at most ${MAX_PARALLEL} in parallel.`,
+  `3) Build: ${AGENT_ROLES.build}; ${AGENT_ROLES.research}/${AGENT_ROLES.design} if files unknown. Start prompt "[budget: <N>m step: <k>]". Max ${MAX_PARALLEL} at once.`,
+  `Then ${AGENT_ROLES.simplify.type} (${AGENT_ROLES.simplify.model}).`,
   '4) Never edit code or build yourself; review reports, re-plan, update TaskProgress; re-dispatch unfinished work with a new budget.',
-  'Multi-action tasks: first ask the approach in one AskUserQuestion (header "Approach", 2-3 options + trade-offs, one Recommended; may share the TaskInputs call). Then TaskPlan `cubes` (id,title,action,summary,problem[],steps[],code[{file,change}],flow 2-6 {file,fn,does,calls?} (non-code: file "shell"),after,doneWhen,minutes<=10), then STOP: the user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Edits: CubeRevise.',
-  'Each cube ends with a review: after its executor reports, dispatch one (tag "review: <id>", not cubes:) running Skill "pr-reviewer" on its changed files, then CubeReview; fix P0/P1 before done.',
-  'Protocol: skill task-progress:orchestrate. Executors ignore this.',
+  'Multi-action tasks: first ask the approach in ONE AskUserQuestion (header "Approach", 2-3 options + trade-offs, one Recommended; may share TaskInputs call). Then TaskPlan `cubes` (id,title,action,summary,problem[],steps[],code[{file,change}],flow 2-6 {file,fn,does,calls?} (non-code: file "shell"),after,doneWhen,minutes<=10), then STOP: user approves each cube. Never dispatch an unapproved cube; tag "cubes: <ids>". Edits: CubeRevise.',
+  `One review at the end: ${AGENT_ROLES.review[0]} (skill task-progress:pr-reviewer) + ${AGENT_ROLES.review[1]} (tag "review: <ids>"), CubeReview; fix P0/P1.`,
+  'Protocol: skill task-progress:orchestrate. Executors ignore it.',
 ].join(' ')
 
 const APPROACH_DENY =
@@ -440,6 +449,9 @@ async function gateDecision($: any, e: any, isOwnCall: boolean, c: Ctx): Promise
         deny: `Orchestrator mode: call ${INPUTS_TOOL} first for this user prompt (an empty inputs list is fine if nothing is needed), then ${e.tool}. If it lists questions, ask them in one AskUserQuestion.`,
       }
     }
+    if (e.tool === 'Agent' && (e.subagent_type ?? e.subagentType) === AGENT_ROLES.simplify.type && e.model !== 'sonnet') {
+      return { deny: 'code-simplifier runs on Sonnet: add model: "sonnet" to this Agent call.' }
+    }
     if (e.tool === 'Agent' && !parseBudget(e.prompt)) {
       return {
         deny: `Orchestrator mode: plan before dispatching. Call ${PLAN_TOOL}, then start the Agent prompt with the line "[budget: <N>m step: <k>]" (minutes for this step).`,
@@ -507,9 +519,6 @@ async function orchestrateCommand($: any, e: any) {
 
 export const register: Register = on => {
   const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [], composeSeen: false, rulesSent: false }
-  // The session dashboard: /tp-dashboard (web). Its collectors ride on the hooks below.
-  registerDashboard(on)
-
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'progress',
@@ -559,7 +568,7 @@ export const register: Register = on => {
               properties: {
                 title: { type: 'string' },
                 minutes: { type: 'number', minimum: 0.5, description: 'Time budget for the executor.' },
-                executor: { type: 'string', description: 'Agent type; default task-progress:executor.' },
+                executor: { type: 'string', description: 'Agent type; default task-progress:executor (build). Research/design: feature-dev agents; simplify: code-simplifier (sonnet).' },
               },
               required: ['title', 'minutes'],
             },
@@ -602,7 +611,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'CubeAnswer',
       description:
-        "Answer the user's question about an approval cube (a prompt starting '[cube question <id> ...]'). The answer shows in that cube's thread on the dashboard. It never changes, approves or dispatches the cube.",
+        "Answer the user's question about an approval cube (a prompt starting '[cube question <id> ...]'). The answer shows in chat. It never changes, approves or dispatches the cube.",
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -616,12 +625,13 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'CubeReview',
       description:
-        "Store the PR review of a cube's changes (from the pr-reviewer skill, run by an executor after the cube's executor reported, or when a prompt starts '[cube review <id> ...]'). APPROVE lets the cube be marked done; REQUEST_CHANGES keeps it open: dispatch a fix executor for the P0/P1 findings and review again.",
+        "Store the PR review of a cube's changes (from the task-progress:pr-reviewer skill, run by an executor after the cube's executor reported, or when a prompt starts '[cube review <id> ...]'). Pass ids[] for one combined review of all built cubes. APPROVE lets the cubes be marked done; REQUEST_CHANGES keeps it open: dispatch a fix executor for the P0/P1 findings and review again.",
       isDeferred: false,
       inputSchema: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'The cube id.' },
+          id: { type: 'string', description: 'The cube id (or use ids for one review of several cubes).' },
+          ids: { type: 'array', items: { type: 'string' }, description: 'Cube ids one review covers; the verdict applies to each.' },
           verdict: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES', 'NEEDS_INVESTIGATION'] },
           summary: { type: 'string', description: 'The review in plain words.' },
           understanding: { type: 'string', description: 'The Feature Understanding Report summary.' },
@@ -651,7 +661,7 @@ export const register: Register = on => {
             },
           },
         },
-        required: ['id', 'verdict', 'summary'],
+        required: ['verdict', 'summary'],
       },
     })
     try {
@@ -693,6 +703,15 @@ export const register: Register = on => {
     stopTicker(c)
     if (value && !value.isDone) startTicker($, c)
     await quiet(onSessionStart($, e))
+    // Safety net: once per session, say so when the plugins the work is routed to are not installed.
+    try {
+      const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? ''}/.claude`
+      const text = await $.fs.read(`${dir}/plugins/installed_plugins.json`)
+      const { message } = missingDeps(installedNames(String(text)))
+      if (message) $.ui.toast(message)
+    } catch {
+      // cannot see the plugin list: say nothing
+    }
     // The cube panel opens by itself while unfinished cubes are stored, unless the person closed it.
     if (!(await $.state.get(closedRef)).value) {
       let b = null
@@ -735,14 +754,14 @@ export const register: Register = on => {
       await openCubesPane($)
       await applyProgress($, c, { task, totalSteps: steps.length, step: 0, label: `${steps.length} cubes · ~${Math.round(total)} min`, done: false })
       try {
-        $.ui.toast(`${steps.length} cubes waiting for approval — /tp-dashboard web`)
+        $.ui.toast(`${steps.length} cubes waiting for approval — /tp-cubes`)
       } catch {
         // best effort
       }
       const lanes = board.lanes.map((l, i) => `lane ${i + 1}: ${l.join(', ')}`).join('; ')
       return {
         result:
-          `cube plan recorded: ${steps.length} cubes, ~${Math.round(total)} min (${lanes}). STOP now and wait: the user approves cubes on the dashboard ` +
+          `cube plan recorded: ${steps.length} cubes, ~${Math.round(total)} min (${lanes}). STOP now and wait: the user approves cubes in the Cubes pane (/tp-cubes) ` +
           `and each approval arrives as a prompt. Never dispatch an unapproved cube; tag dispatches "[budget: <N>m step: <k> cubes: <ids>]".` +
           (board.gate ? '' : ' (The approval gate is off.)'),
       }
@@ -766,7 +785,7 @@ export const register: Register = on => {
     return {
       result:
         `plan recorded: ${steps.length} steps, ~${Math.round(total)} min. ${list}. ` +
-        `Dispatch each step to task-progress:executor with the first prompt line "[budget: <N>m step: <k>]" (max ${MAX_PARALLEL} at once).`,
+        `Build steps go to task-progress:executor; research/design to feature-dev:code-explorer/code-architect only when files are unknown; run code-simplifier:code-simplifier (sonnet) after code changes. First prompt line "[budget: <N>m step: <k>]" (max ${MAX_PARALLEL} at once).`,
     }
   })
 

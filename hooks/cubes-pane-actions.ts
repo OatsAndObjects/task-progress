@@ -1,11 +1,19 @@
-// Actions behind the terminal cubes pane buttons. Same commands the web sends.
+// Actions behind the terminal cubes pane buttons. Same commands as the dashboard command bridge.
 import type { Cube, DashboardCommand } from '../types/index'
 import { command } from './dashboard'
 
-export type PaneAction = { kind: 'approve' | 'reject'; id: string } | { kind: 'approveAll' }
+export type PaneAction = { kind: 'approve' | 'reject'; id: string } | { kind: 'approveAll' } | { kind: 'toggleDetails'; id: string }
 
-/** The exact command the web app sends (web/app/cubes.js: cmd('cube.approve', { id })). */
-export function paneActionToCommand(a: PaneAction): DashboardCommand {
+
+/** Flip one cube id in the open-details list (pane state, not a cube command). */
+export async function toggleDetails($: any, id: string): Promise<void> {
+  const { value } = await $.state.get({ plugin: 'task-progress', key: 'cubesPaneOpen' })
+  const cur: string[] = Array.isArray(value) ? value : []
+  await $.state.set({ plugin: 'task-progress', key: 'cubesPaneOpen' }, cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id])
+}
+
+/** The command the Cubes pane sends for an approve or reject button. */
+export function paneActionToCommand(a: Exclude<PaneAction, { kind: 'toggleDetails' }>): DashboardCommand {
   if (a.kind === 'approveAll') return { action: 'cube.approveAll' } as DashboardCommand
   return { action: a.kind === 'approve' ? 'cube.approve' : 'cube.reject', id: a.id } as DashboardCommand
 }
@@ -17,6 +25,14 @@ export function buttonsFor(cube: Pick<Cube, 'status'>): Array<'approve' | 'rejec
 
 /** Run one pane action and toast the result. Never throws. */
 export async function runPaneAction($: any, a: PaneAction): Promise<void> {
+  if (a.kind === 'toggleDetails') {
+    try {
+      await toggleDetails($, a.id)
+    } catch {
+      // best effort
+    }
+    return
+  }
   let text: string
   try {
     const r = await command($, paneActionToCommand(a))

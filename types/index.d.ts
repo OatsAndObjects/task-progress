@@ -70,6 +70,8 @@ export type SnapshotAgent = {
   step?: number
   /** From the dispatch tag: the cube this agent builds or reviews. */
   cube?: { id: string; kind: 'build' | 'review' }
+  /** Short summary of its latest tool call, e.g. `Edit hooks/x.ts`. */
+  lastTool?: string
 }
 /** One function-level step of a cube. Boards stored before 0.10 hold strings, normalized to `{file:'',fn:'',does}`. */
 export type FlowStep = {
@@ -148,6 +150,8 @@ export type CubeBoard = {
   /** When true, only cubes the user approved may be dispatched. */
   gate: boolean
   cubes: Cube[]
+  /** Key of the reviewing cubes the combined review prompt was last sent for (ids and finish times). */
+  reviewSent?: string
   /** Cube ids grouped by dependency depth (computed): lane 0 has no deps. */
   lanes: string[][]
 }
@@ -184,8 +188,6 @@ export type Snapshot = {
 /** A dashboard command, from the web bridge: `{ action, ...args }`. */
 export type DashboardCommand = { action: string; [arg: string]: unknown }
 export type DashboardCommandResult = { ok: boolean; message: string; data?: Record<string, unknown> }
-/** The running web bridge, if any. */
-export type DashboardWeb = { port: number; url: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -202,12 +204,18 @@ declare module 'claude-code' {
       pending: PendingRun[]
       /** The session dashboard (written throttled). */
       snapshot: Snapshot | null
-      /** The dashboard web server while it runs. */
-      web: DashboardWeb | null
-      /** Once-per-session marks for the web dashboard (browser opened). */
-      webMarks: { sessionId: string; opened: boolean } | null
       /** Approval gate for new cube boards; unset means on. */
       cubesGate: 'on' | 'off'
+      /** Prompts a tool call could not submit; sent on the next turn.complete. */
+      deferredPrompts: string[]
+      /** True once the Approach question was asked for the current plan. */
+      approachAsked: boolean
+      /** True after a person closed the Cubes pane, until the next plan. */
+      cubesPaneClosed: boolean
+      /** Cube ids whose details are open in the Cubes pane. */
+      cubesPaneOpen: string[]
+      /** Counter bumped by the agent poll while an agent runs, so the Cubes pane redraws its countdown. */
+      paneTick: number
     }
   }
 }

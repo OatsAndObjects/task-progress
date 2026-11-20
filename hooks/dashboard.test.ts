@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { flushDeferredPrompts } from './dashboard'
 import type { Snapshot } from '../types/index'
 import {
   PER_TURN_MAX,
@@ -8,7 +9,6 @@ import {
   attributeTurn,
   attributeTool,
   setContextBreakdown,
-  commandFromLine,
   emptySnapshot,
   markOverruns,
   parseTaskNotification,
@@ -16,7 +16,6 @@ import {
   setAgentStatus,
   setMeasure,
   setPlan,
-  splitLines,
   type CommandDeps,
 } from './dashboard-model'
 
@@ -96,35 +95,6 @@ test('runCommand never throws when a dependency fails', async () => {
     throw new Error('denied')
   }
   expect(await runCommand({ action: 'prompt.send', text: 'x' }, f.d)).toEqual({ ok: false, message: 'denied' })
-})
-
-test('a bridge command line: target id comes from args.id, not the command id', async () => {
-  const line = { type: 'command', id: 'cmd-uuid', action: 'cube.approve', args: { id: 'c1' } }
-  const { commandId, cmd } = commandFromLine(line)
-  expect(commandId).toBe('cmd-uuid')
-  expect(cmd).toEqual({ action: 'cube.approve', id: 'c1' })
-  // No args: the command id must not become a target id.
-  expect(commandFromLine({ type: 'command', id: 'c2', action: 'cube.approveAll' }).cmd.id).toBe(undefined)
-})
-
-test('splitLines buffers across split and merged chunks', () => {
-  let r = splitLines('', '{"type":"rea')
-  expect(r).toEqual({ lines: [], rest: '{"type":"rea' })
-  r = splitLines(r.rest, 'dy","port":1}\n{"type":"command"}\r\n{"par')
-  expect(r.lines).toEqual(['{"type":"ready","port":1}', '{"type":"command"}'])
-  expect(r.rest).toBe('{"par')
-  r = splitLines(r.rest, 'tial":1}\n\n')
-  expect(r).toEqual({ lines: ['{"partial":1}'], rest: '' })
-})
-
-test('/tp-dashboard has no pane: web, auto and usage only', async ($: any, on: any) => {
-  mock.clock(on, { now: 1_000_000 })
-  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
-  on('tool.register', () => ({ value: { tool: 'x' } }))
-  on('command.register', () => ({ value: { command: 'x' } }))
-  const u = (await $.command.run({ command: 'tp-dashboard', args: 'bogus' })).text
-  expect(u).toContain('Usage: /tp-dashboard web')
-  expect(u).not.toContain('close')
 })
 
 test('session.measure fills snapshot.usage', () => {
@@ -231,4 +201,21 @@ test('byModel from usage.model, cap 40 incl other, non-main without cube is unat
   s = attributeTurn(s, { agentId: 'abcdef123456', model: 'x', usage: u })
   expect(s.usage!.breakdown!.byCube).toContainEqual({ label: 'unattributed', tokens: 2 })
   expect(s.usage!.breakdown!.byAgent).toContainEqual({ label: 'abcdef12', tokens: 2 })
+})
+
+test('flushDeferredPrompts restores the prompts when submit fails, and clears them when it works', async () => {
+  const store: Record<string, any> = { deferredPrompts: ['a', 'b'] }
+  let fail = true
+  const sent: string[] = []
+  const $: any = {
+    state: { get: async (r: any) => ({ value: store[r.key] }), set: async (r: any, v: any) => { store[r.key] = v } },
+    prompt: { submit: async (p: any) => { if (fail) throw new Error('refused'); sent.push(p.text) } },
+    ui: { log: () => {} },
+  }
+  await flushDeferredPrompts($)
+  expect(store.deferredPrompts).toEqual(['a', 'b'])
+  fail = false
+  await flushDeferredPrompts($)
+  expect(store.deferredPrompts).toEqual([])
+  expect(sent).toEqual(['a\nb'])
 })

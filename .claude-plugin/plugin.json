@@ -1,9 +1,9 @@
 {
   "name": "task-progress",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "author": {
     "name": "nimis"
   },
-  "description": "Estimated progress bar for the current task in a band above the prompt, orchestrator mode, approval cubes (atomic, function-level plan cubes you approve before they run, each ending in a pr-reviewer PR review), and a session dashboard (/tp-dashboard pane plus a localhost web app)",
+  "description": "Estimated progress bar above the prompt, orchestrator mode that routes work to executors, feature-dev and code-simplifier agents, approval cubes (atomic plans you approve before they run, with one combined pr-reviewer review) and a terminal Cubes pane (agents, cubes, usage)",
   "types": "./types/index.d.ts"
 }

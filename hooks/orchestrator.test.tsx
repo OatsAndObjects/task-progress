@@ -125,6 +125,18 @@ test('dispatch without a budget tag is denied; with one it is allowed', async ($
   expect(yes.deny).toBeUndefined()
 })
 
+test('code-simplifier must run on sonnet', async ($, on) => {
+  const { call, start } = setup($, on)
+  await start()
+  await call(INPUTS, { inputs: [], asked: false })
+  const type = 'code-simplifier:code-simplifier'
+  const prompt = '[budget: 6m step: 1]\ngo'
+  expect((await call('Agent', { prompt, description: 'd', subagent_type: type })).deny).toContain('Sonnet')
+  expect((await call('Agent', { prompt, description: 'd', subagent_type: type, model: 'opus' })).deny).toContain('Sonnet')
+  expect((await call('Agent', { prompt, description: 'd', subagent_type: type, model: 'sonnet' })).deny).toBeUndefined()
+  expect((await call('Agent', { prompt, description: 'd', subagent_type: 'task-progress:executor' })).deny).toBeUndefined()
+})
+
 // A 2 min budget: the 120 ms ticker runs once per mocked tick, so a 10 min budget (5000 ticks) sometimes exceeded the 5 s test limit.
 test('executor time budget: allow, wrap-up notice once at 80%, deny at 100%', async ($, on) => {
   const { clock, call, dispatch, start } = setup($, on)

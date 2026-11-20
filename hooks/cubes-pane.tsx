@@ -2,6 +2,8 @@
 // the render and open helpers are the only parts that touch the engine.
 import type { Cube, CubeBoard } from '../types/index'
 import { buttonsFor, runPaneAction } from './cubes-pane-actions'
+import { buildAgentRows, trunc } from './pane-agents'
+import { buildUsageRows } from './pane-usage'
 
 export const PANE_ID = 'tp-cubes'
 export const PANE_TITLE = 'Cubes'
@@ -32,11 +34,17 @@ export type CubeRow = {
   dim?: boolean
   /** Buttons under a cube row, from buttonsFor (the one rule). Empty for every status but `proposed`. */
   buttons?: Array<'approve' | 'reject'>
+  /** Trimmed summary (legacy `details` when no summary). */
+  summary?: string
+  /** Details are open: sections hold the content. */
+  open?: boolean
+  /** True when the cube has any section content to open. */
+  hasDetails?: boolean
+  sections?: Array<{ title: string; items: string[]; numbered?: boolean }>
   /** footer: how many cubes Approve all would approve. */
   count?: number
 }
 
-const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 
 function statusOf(cb: Cube, board: CubeBoard): Pick<CubeRow, 'glyph' | 'word' | 'color' | 'dim'> {
   const open = cb.after.filter(id => !['done', 'skipped'].includes(board.cubes.find(x => x.id === id)?.status ?? 'done'))
@@ -65,7 +73,20 @@ function statusOf(cb: Cube, board: CubeBoard): Pick<CubeRow, 'glyph' | 'word' | 
 }
 
 /** The board as display rows: a counts header, one row per cube, or an empty state. */
-export function buildCubeRows(board: CubeBoard | null | undefined): CubeRow[] {
+function sectionsOf(cb: Cube): Array<{ title: string; items: string[]; numbered?: boolean }> {
+  const out: Array<{ title: string; items: string[]; numbered?: boolean }> = []
+  if (cb.problem?.length) out.push({ title: 'Problem', items: cb.problem })
+  if (cb.steps?.length) out.push({ title: 'Steps', items: cb.steps, numbered: true })
+  if (cb.code?.length) out.push({ title: 'Code touched', items: cb.code.map(c => `${c.file} › ${c.change}`) })
+  const rv = cb.review
+  if (rv && (rv.verdict || rv.summary)) {
+    const one = (rv.summary ?? '').replace(/\s+/g, ' ').trim()
+    out.push({ title: 'Review', items: [[rv.verdict, one].filter(Boolean).join(' · ')] })
+  }
+  return out
+}
+
+export function buildCubeRows(board: CubeBoard | null | undefined, openIds: string[] = []): CubeRow[] {
   if (!board || board.cubes.length === 0) return [{ kind: 'empty', text: 'No cubes yet. A plan with cubes shows up here for approval.' }]
   const n = (f: (c: Cube) => boolean) => board.cubes.filter(f).length
   const done = n(c => c.status === 'done' || c.status === 'skipped')
@@ -84,6 +105,10 @@ export function buildCubeRows(board: CubeBoard | null | undefined): CubeRow[] {
       after: cb.after,
       buttons: buttonsFor(cb),
       ...statusOf(cb, board),
+      summary: (cb.summary || cb.details || '').trim() || undefined,
+      hasDetails: sectionsOf(cb).length > 0,
+      open: openIds.includes(cb.id),
+      ...(openIds.includes(cb.id) ? { sections: sectionsOf(cb) } : {}),
     })
   }
   if (waiting > 0) rows.push({ kind: 'footer', text: `Approve all (${waiting})`, count: waiting })
@@ -94,9 +119,30 @@ export function buildCubeRows(board: CubeBoard | null | undefined): CubeRow[] {
 export async function renderCubesPane($: any, e: any) {
   const { Box, Text, Button } = $.ui.resolve(e)
   const { value } = await $.state.get(snapRef)
-  const rows = buildCubeRows(value?.cubes)
+  const { value: openValue } = await $.state.get({ plugin: 'task-progress', key: 'cubesPaneOpen' })
+  const openIds: string[] = Array.isArray(openValue) ? openValue : []
+  await $.state.get({ plugin: 'task-progress', key: 'paneTick' }) // subscribe: the poll ticks it while an agent runs
+  const rows = buildCubeRows(value?.cubes, openIds)
+  const agentRows = buildAgentRows(value?.agents, await $.clock.now())
+  const usageRows = buildUsageRows(value, await $.clock.now())
+  const running = agentRows.filter(a => a.state === 'running').length
   return (
     <Box flexDirection="column">
+      {agentRows.length > 0 ? (
+        <Box flexDirection="column" marginBottom={1}>
+          <Text bold>{`Agents · ${running} running`}</Text>
+          {agentRows.map((a, i) => (
+            <Box key={`ag${i}`} flexDirection="column">
+              <Box>
+                <Text color={a.state === 'failed' || a.over ? 'red' : a.state === 'running' ? 'yellow' : 'green'} dimColor={a.state !== 'running'}>{a.glyph} </Text>
+                <Text dimColor={a.state !== 'running'}>{[a.name, a.tag].filter(Boolean).join(' · ')}</Text>
+                {a.time ? <Text color={a.over ? 'red' : undefined}>{` · ${a.time}`}</Text> : null}
+              </Box>
+              {a.detail ? <Text dimColor>{`  ${a.detail}`}</Text> : null}
+            </Box>
+          ))}
+        </Box>
+      ) : null}
       {rows.map((r, i) => {
         if (r.kind === 'header') return <Text key={`h${i}`} bold>{r.text}</Text>
         if (r.kind === 'empty') return <Text key={`e${i}`} dimColor>{r.text}</Text>
@@ -114,6 +160,24 @@ export async function renderCubesPane($: any, e: any) {
               <Text bold={!r.dim} dimColor={r.dim}>{r.id} · {r.title}</Text>
             </Box>
             <Text dimColor>{`  ${r.word} · ${r.minutes}m${r.after && r.after.length ? ` · after ${r.after.join(', ')}` : ''}`}</Text>
+            {r.summary ? <Text dimColor>{`  ${r.summary}`}</Text> : null}
+            {r.hasDetails ? (
+              <Box marginLeft={2}>
+                <Button key={`details-${r.id}`} onPress={() => void runPaneAction($, { kind: 'toggleDetails', id: r.id! })}>{r.open ? '▾ Hide' : '▸ Details'}</Button>
+              </Box>
+            ) : null}
+            {r.open && r.sections
+              ? r.sections.map(sec => (
+                  <Box key={`${r.id}-${sec.title}`} flexDirection="column" marginLeft={2}>
+                    <Text bold>{sec.title}</Text>
+                    {sec.items.map((it, j) => (
+                      <Box key={j} marginLeft={2}>
+                        <Text>{sec.numbered ? `${j + 1}. ${it}` : sec.title === 'Review' ? it : `- ${it}`}</Text>
+                      </Box>
+                    ))}
+                  </Box>
+                ))
+              : null}
             {r.buttons && r.buttons.length > 0 ? (
               // Own line under the row: the two buttons plus the indent fit 44 columns.
               <Box marginLeft={2}>
@@ -127,6 +191,13 @@ export async function renderCubesPane($: any, e: any) {
           </Box>
         )
       })}
+      {usageRows.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          {usageRows.map((r, i) => (
+            <Text key={`u${i}`} bold={r.kind === 'header'} dimColor={r.color === undefined} color={r.color}>{r.kind === 'agent' ? `  ${r.text}` : r.text}</Text>
+          ))}
+        </Box>
+      ) : null}
     </Box>
   )
 }

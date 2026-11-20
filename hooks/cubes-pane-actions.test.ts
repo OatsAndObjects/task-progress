@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { paneActionToCommand, buttonsFor, runPaneAction } from './cubes-pane-actions'
+import { paneActionToCommand, buttonsFor, runPaneAction, toggleDetails } from './cubes-pane-actions'
 import { emptySnapshot } from './dashboard-model'
 
 test('paneActionToCommand matches what the web sends', () => {
@@ -48,4 +48,14 @@ test('runPaneAction toasts on success, then on failure, and never throws', async
   expect(toasts[2]).toContain('after c1')
   expect(toasts[2]).not.toBe('Approved all')
   await runPaneAction({ ui: { toast() { throw new Error('x') } } } as any, { kind: 'approveAll' })
+})
+
+test('toggleDetails adds then removes the id', async () => {
+  const store = new Map<string, any>()
+  const $ = fake(store, [], [])
+  await toggleDetails($, 'c1')
+  await runPaneAction($, { kind: 'toggleDetails', id: 'c2' })
+  expect(store.get('cubesPaneOpen')).toEqual(['c1', 'c2'])
+  await toggleDetails($, 'c1')
+  expect(store.get('cubesPaneOpen')).toEqual(['c2'])
 })

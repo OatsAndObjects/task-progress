@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { addThreadMessage, answerCube, checkDescribed, applyReview, buildBoard, checkAtomic, computeLanes, finishAndRelease, flowLabel, gateCheck, missingDescribed, normalizeBoardFlow, normalizeCube, reviewCubeResult, reviseCube, runCubeCommand, topoOrder } from './cubes-model'
-import { commandFromLine, parseBudget } from './dashboard-model'
+import { parseBudget } from './dashboard-model'
 
 const st = (n: string, extra: any = {}) => ({ file: `${n}.ts`, fn: `${n}Fn`, does: `does ${n}`, ...extra })
 const FL2 = [st('a'), st('b')]
@@ -107,21 +107,56 @@ test('approve with pending deps queues; finishing the dep releases it in one pro
   await run(g.d, 'cube.approve', { id: 'c1' })
   expect(g.prompts.length).toBe(3)
   g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, status: 'running', agentId: 'a1' } : c)) } })
-  // The executor finished: c1 waits for its review, so nothing is released yet.
-  const none = await finishAndRelease(g.d, 'a1', true)
-  expect(none).toEqual([])
+  // The executor finished: c1 waits for its review, but a reviewing dep already releases its dependents.
+  const released = await finishAndRelease(g.d, 'a1', true)
+  expect(released.map((c: any) => c.id)).toEqual(['c2', 'c3'])
   expect(g.st('c1')).toBe('reviewing')
-  expect(g.st('c2')).toBe('queued')
+  expect(g.st('c2')).toBe('approved')
+  // c2/c3 are approved (not yet built): no review prompt, only the release prompt.
   expect(g.prompts.length).toBe(4)
-  expect(g.prompts[3]).toContain('Cube c1 is in review: dispatch a review executor tagged "[budget: <N>m step: <k> review: c1]" (Skill "pr-reviewer" on its files), then CubeReview.')
+  expect(g.prompts[3]).toContain('c2')
+  expect(g.prompts.some((p: string) => p.includes('in review'))).toBe(false)
   const r = await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
   expect(r.ok).toBe(true)
   expect(g.st('c1')).toBe('done')
   expect(g.cube('c1').review.status).toBe('passed')
   expect(g.st('c2')).toBe('approved')
-  expect(g.prompts.length).toBe(5)
-  expect(g.prompts[4]).toContain('c2')
-  expect(g.prompts[4]).toContain('c3')
+})
+
+test('a multi-id review: tag is accepted when every cube is in review/done/failed', () => {
+  const g = rig([ok('c1'), ok('c2'), ok('c3')])
+  const b = (s1: string, s2: string) => ({ ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === 'c1' ? { ...c, status: s1 } : c.id === 'c2' ? { ...c, status: s2 } : c)) })
+  expect(gateCheck(b('reviewing', 'reviewing'), undefined, ['c1', 'c2'])).toBeNull()
+  expect(gateCheck(b('reviewing', 'done'), undefined, ['c1', 'c2'])).toBeNull()
+  expect(gateCheck(b('reviewing', 'running'), undefined, ['c1', 'c2'])).toContain('c2 is running')
+  expect(parseBudget('[budget: 5m step: 1 review: c1, c2]')?.review).toEqual(['c1', 'c2'])
+})
+
+test('a dependent can run while its dep is reviewing', async () => {
+  const g = rig(pair())
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  await run(g.d, 'cube.approve', { id: 'c2' })
+  running(g)
+  await finishAndRelease(g.d, 'a1', true)
+  expect(g.st('c1')).toBe('reviewing')
+  expect(gateCheck(g.board(), ['c2'])).toBeNull()
+})
+
+test('CubeReview ids [c1,c2]: APPROVE marks both done; REQUEST_CHANGES reopens only the cube whose file is named', () => {
+  const two = (verdict: string, findings?: any[]) => {
+    const g = rig([ok('c1', [], { flow: [st('p'), st('q')] }), ok('c2', [], { code: [{ file: 'b.ts › b', change: 'x' }], flow: [st('x'), st('y')] })])
+    const board = { ...g.board(), cubes: g.board().cubes.map((c: any) => ({ ...c, status: 'reviewing' })) }
+    return reviewCubeResult(board, { ids: ['c1', 'c2'], verdict, summary: 's', findings }, 1) as any
+  }
+  const a = two('APPROVE')
+  expect(a.board.cubes.map((c: any) => c.status)).toEqual(['done', 'done'])
+  const r = two('REQUEST_CHANGES', [{ severity: 'P1', summary: 'bug', file: 'b.ts', line: 3 }])
+  expect(r.board.cubes.map((c: any) => c.status)).toEqual(['reviewing', 'approved'])
+  expect(r.message).toContain('c2: reopened')
+  expect(r.message).toContain('c1: kept')
+  const all = two('REQUEST_CHANGES', [{ severity: 'P1', summary: 'bug' }])
+  expect(all.board.cubes.map((c: any) => c.status)).toEqual(['approved', 'approved'])
+  expect(reviewCubeResult(rig([ok('c1')]).board(), { ids: ['c1', 'c9'], verdict: 'APPROVE', summary: 's' }, 1)).toEqual({ error: 'no cube c9' })
 })
 
 function running(g: any) {
@@ -150,7 +185,7 @@ test('cube.markDone forces a cube in review to done and releases dependents', as
   await run(g.d, 'cube.approve', { id: 'c2' })
   running(g)
   await finishAndRelease(g.d, 'a1', true)
-  expect(g.st('c2')).toBe('queued')
+  expect(g.st('c2')).toBe('approved')
   expect(((await run(g.d, 'cube.markDone', { id: 'c1' })) as any).ok).toBe(true)
   expect(g.st('c1')).toBe('done')
   expect(g.st('c2')).toBe('approved')
@@ -282,16 +317,6 @@ test('dispatch gate: unapproved denied, untagged denied while open, approved all
   expect(gateCheck(done, [])).toBeNull()
 })
 
-test('commandFromLine keeps the cube sentence apart from the command action', () => {
-  const { cmd } = commandFromLine({ type: 'command', id: 'x1', action: 'cube.update', args: { id: 'c1', actionText: 'Say hi' } })
-  expect(cmd.action).toBe('cube.update')
-  expect(cmd.id).toBe('c1')
-  expect(cmd.actionText).toBe('Say hi')
-  const old = commandFromLine({ type: 'command', id: 'x2', action: 'cube.add', args: { action: 'Old style sentence' } })
-  expect(old.cmd.action).toBe('cube.add')
-  expect(old.cmd.cubeAction).toBe('Old style sentence')
-})
-
 // ---- cube questions (cube.ask / CubeAnswer) ----
 test('cube.ask appends a user message, sends the question prompt and changes nothing else', async () => {
   const g = rig(pair())
@@ -398,7 +423,7 @@ test('cube.review sends the pr-reviewer prompt and marks the review running', as
   expect(res.ok).toBe(true)
   expect(g.prompts.length).toBe(1)
   expect(g.prompts[0]).toContain('[cube review c1 "tc1"]')
-  expect(g.prompts[0]).toContain('pr-reviewer')
+  expect(g.prompts[0]).toContain('task-progress:pr-reviewer')
   expect(g.prompts[0]).toContain('CubeReview')
   expect(g.prompts[0]).toContain('hooks/a.ts, extra/z.ts')
   expect(g.prompts[0]).not.toContain('shell')
@@ -497,13 +522,9 @@ test('cube details: stored, revised, kept, cut, optional', () => {
   expect(by(cleared.board, 'c1').details).toBeUndefined()
 })
 
-test('approveAll via the real line parser: whitespace/case in the id, args {} or missing, prompt submitted', async () => {
-  for (const msg of [
-    { type: 'command', id: 'k1', action: 'cube.approveAll', args: {} },
-    { type: 'command', id: 'k2', action: 'cube.approveAll' },
-  ]) {
+test('approveAll: prompt submitted', async () => {
+  for (const cmd of [{ action: 'cube.approveAll' }]) {
     const g = rig([ok('c1'), ok('c2'), ok('c3', ['c1'])])
-    const { cmd } = commandFromLine(msg as any)
     const res: any = await runCubeCommand(cmd, g.d)
     expect(res.ok).toBe(true)
     expect(g.prompts.length).toBe(1)
@@ -527,13 +548,15 @@ test('waiting cube is released after the dependency review APPROVE and after mar
     expect(g.prompts.length).toBe(1)
     running(g)
     await finishAndRelease(g.d, 'a1', true)
-    expect(g.st('c2')).toBe('queued')
+    // c1 reviewing already releases c2 (announced once, before the review)
+    expect(g.st('c2')).toBe('approved')
+    expect(g.prompts.some((p: string) => p.includes('approved cube c2'))).toBe(true)
     const before = g.prompts.length
     if (how === 'review') await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
     else await run(g.d, 'cube.markDone', { id: 'c1' })
+    expect(g.st('c1')).toBe('done')
     expect(g.st('c2')).toBe('approved')
-    expect(g.prompts.length).toBe(before + 1)
-    expect(g.prompts[before]).toContain('approved cube c2')
+    expect(g.prompts.length).toBe(before)
   }
 })
 
@@ -552,7 +575,7 @@ test('a release while a turn runs is handed to submit, which queues it for the i
   await applyReview(g.d, { id: 'c1', verdict: 'APPROVE', summary: 'fine' })
   expect(g.st('c2')).toBe('approved')
   expect(g.prompts.filter(p => p.includes('approved cube c2')).length).toBe(1)
-  expect(calls).toBe(3)
+  expect(calls).toBe(2)
 })
 
 test('describing fields: normalized, capped, empty dropped', () => {
@@ -639,4 +662,64 @@ test('approveAll with a ready cube and a queued one: execute c1, mention c2 queu
   expect(g.prompts[0]).toContain('c2')
   expect(g.prompts[0]).toContain('queued')
   expect(g.prompts[0]).toContain('after c1')
+})
+
+test('review prompt is sent once, only when all cubes are built, naming every reviewing id', async () => {
+  const g = rig([ok('c1'), ok('c2')])
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  await run(g.d, 'cube.approve', { id: 'c2' })
+  const setRun = (id: string, agent: string) =>
+    g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (c.id === id ? { ...c, status: 'running', agentId: agent } : c)) } })
+  setRun('c1', 'a1')
+  setRun('c2', 'a2')
+  const before = g.prompts.length
+  await finishAndRelease(g.d, 'a1', true)
+  expect(g.prompts.length).toBe(before)
+  await finishAndRelease(g.d, 'a2', true)
+  expect(g.prompts.length).toBe(before + 1)
+  const last = g.prompts[g.prompts.length - 1]
+  expect(last).toContain('c1, c2')
+  expect(last).toContain('ids ["c1", "c2"]')
+})
+
+// ---- combined review prompt trigger ----
+const setStatus = (g: any, patch: Record<string, any>) =>
+  g.d.put({ ...g.d.get(), cubes: { ...g.board(), cubes: g.board().cubes.map((c: any) => (patch[c.id] ? { ...c, ...patch[c.id] } : c)) } })
+const reviewPrompts = (g: any) => g.prompts.filter((p: string) => p.includes('are built and in review'))
+
+test('review prompt is sent when the last cube fails while others are reviewing, and only once', async () => {
+  const g = rig([ok('c1'), ok('c2')])
+  await run(g.d, 'cube.approveAll')
+  setStatus(g, { c1: { status: 'running', agentId: 'a1' }, c2: { status: 'running', agentId: 'a2' } })
+  await finishAndRelease(g.d, 'a1', true)
+  expect(reviewPrompts(g).length).toBe(0)
+  await finishAndRelease(g.d, 'a2', false)
+  expect(g.st('c1')).toBe('reviewing')
+  expect(g.st('c2')).toBe('failed')
+  expect(reviewPrompts(g).length).toBe(1)
+  expect(reviewPrompts(g)[0]).toContain('c1')
+  // same set again (an unrelated agent finishing, a reject that changes nothing for c1): not sent twice
+  await finishAndRelease(g.d, 'a2', false)
+  await run(g.d, 'cube.reject', { id: 'c2' })
+  expect(reviewPrompts(g).length).toBe(1)
+})
+
+test('rejecting the last unbuilt cube sends the review prompt for the reviewing ones', async () => {
+  const g = rig([ok('c1'), ok('c2')])
+  await run(g.d, 'cube.approve', { id: 'c1' })
+  setStatus(g, { c1: { status: 'running', agentId: 'a1' } })
+  await finishAndRelease(g.d, 'a1', true)
+  // c2 is only proposed: not blocking, so the prompt already went once
+  expect(reviewPrompts(g).length).toBe(1)
+  await run(g.d, 'cube.reject', { id: 'c2' })
+  expect(reviewPrompts(g).length).toBe(1)
+})
+
+test('multi-id REQUEST_CHANGES with no matching file reopens all listed cubes; matches reopen only those', () => {
+  const r: any = buildBoard('T', [ok('c1', [], { files: ['one.ts'] }), ok('c2', [], { files: ['two.ts'] })], true)
+  const b = { ...r.board, cubes: r.board.cubes.map((c: any) => ({ ...c, status: 'reviewing', flow: [], code: [] })) }
+  const un: any = reviewCubeResult(b, { ids: ['c1', 'c2'], verdict: 'REQUEST_CHANGES', summary: 's', findings: [{ severity: 'P1', summary: 'x', file: 'zzz.ts' }] }, 1)
+  expect(un.board.cubes.map((c: any) => c.status)).toEqual(['approved', 'approved'])
+  const hit: any = reviewCubeResult(b, { ids: ['c1', 'c2'], verdict: 'REQUEST_CHANGES', summary: 's', findings: [{ severity: 'P1', summary: 'x', file: 'two.ts' }] }, 1)
+  expect(hit.board.cubes.map((c: any) => c.status)).toEqual(['reviewing', 'approved'])
 })
