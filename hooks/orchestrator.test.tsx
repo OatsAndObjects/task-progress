@@ -473,3 +473,31 @@ test('gate applies with approval cubes off too, and CubeRevise split needs the f
   const sp = await call('mcp__task-progress__CubeRevise', { id: 'c1', splitInto: [{ ...ONE_CUBE, summary: undefined }, { ...ONE_CUBE, id: 'c1b' }] })
   expect(String(sp.result)).toContain('cube c1 is missing summary')
 })
+
+test('agent rows animate while 2 agents run, show done art for 3 s, then the band returns to normal', async ($, on) => {
+  const { clock, dispatch, bandTexts, start } = setup($, on)
+  on('turn.complete', (_: any, e: any) => ({ text: String(e.answer ?? '') }))
+  let frames = 0
+  on('state.set', (_: any, e: any, next: any) => {
+    if (e.key === 'frame') frames += 1
+    return next(e)
+  })
+  await start()
+  expect(await bandTexts()).toEqual([{ text: 'ENGINE', color: undefined }]) // 0 agents: unchanged
+  await dispatch(4, 1)
+  await dispatch(4, 2)
+  const t = await bandTexts()
+  const joined = t.map(x => x.text).join('|')
+  expect(joined).toContain('step 1 · 4:00 left')
+  expect(joined).toContain('step 2 · 4:00 left')
+  // Each agent row starts with a glyph Text of its own, so the rows carry more Texts than the old single row.
+  expect(t.length).toBeGreaterThanOrEqual(5)
+  await $.turn.complete({ agentId: 'a1', reason: 'answer', answer: 'x' } as any)
+  await $.turn.complete({ agentId: 'a2', reason: 'answer', answer: 'x' } as any)
+  expect((await bandTexts()).length).toBeGreaterThan(1) // the done line sits beside the engine's row
+  await clock.advance(3_500)
+  expect((await bandTexts()).map(x => x.text)).toEqual(['ENGINE'])
+  const after = frames
+  await clock.advance(2_000)
+  expect(frames).toBe(after) // clock stopped
+})

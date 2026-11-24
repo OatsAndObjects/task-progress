@@ -201,7 +201,17 @@ declare module 'claude-code' {
       inputsChecked: boolean
       plan: TaskPlanRecord | null
       runs: ExecutorRun[]
+      /** Epoch ms when the last agent finished; the done art shows for 3 s after (0 = none). */
+      animDoneAt: number
       pending: PendingRun[]
+      /** True after a person closed the Agents pane; it is not auto-opened again this session. */
+      agentsPaneClosed: boolean
+      /** True while the Agents pane is open. */
+      agentsPaneOpen: boolean
+      /** True when the person opened the Agents pane with /tp-agents (it stays open when idle). */
+      agentsPaneManual: boolean
+      /** True when the pane was opened by the first spawn, so the done window closes it. */
+      agentsPaneAuto: boolean
       /** The session dashboard (written throttled). */
       snapshot: Snapshot | null
       /** Approval gate for new cube boards; unset means on. */

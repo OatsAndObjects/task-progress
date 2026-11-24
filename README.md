@@ -51,6 +51,12 @@ For a multi-action task, Claude calls `TaskPlan` with `cubes` and stops. Each cu
 - **Cubes**: each with its summary and a Details toggle (problem, steps, code, done when, flow, review); Approve, Reject and Approve all.
 - **Usage**: 5-hour and 7-day limits and top agents.
 
+## Agent animation
+
+- The band animates agent rows as a little orange Claude-style block mascot (walks, blinks, hops when done), with a done line.
+- The Agents pane shows big animated art. It opens on its own when agents start (in terminals at least 144 columns wide) and closes 3 s after they finish.
+- `/tp-agents` opens or closes the pane.
+
 ## Auto /context then /clear
 
 When the last cube of a plan finishes, the plugin runs `/context`, saves the output (in `~/.claude/task-progress-context/`), then runs `/clear`. This happens once per plan.

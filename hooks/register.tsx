@@ -20,8 +20,10 @@ import {
 } from './dashboard'
 import { parseBudget } from './dashboard-model'
 import { installedNames, missingDeps } from './deps-check'
+import { AGENTS_PANE_ID, autoCloseAgentsPane, autoOpenAgentsPane, onAgentsPaneClose, renderAgentsPane, toggleAgentsPane } from './agents-pane'
 import { PANE_ID, hasUnfinished, onCubesPaneClose, openCubesPane, renderCubesPane } from './cubes-pane'
 import { buildBoard, checkDescribed, gateCheck, normalizeCube, topoOrder } from './cubes-model'
+import { bandHeader, doneLine, glyph, verbFor, type Line } from './anim-frames'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
 
 const PLUGIN = 'task-progress'
@@ -138,6 +140,9 @@ const checkedRef = { plugin: 'task-progress', key: 'inputsChecked' } as const
 /** True once the main session asked an AskUserQuestion with header "Approach" for this user prompt. */
 const approachRef = { plugin: 'task-progress', key: 'approachAsked' } as const
 const planRef = { plugin: 'task-progress', key: 'plan' } as const
+const snapshotRef = { plugin: 'task-progress', key: 'snapshot' } as const
+const animDoneRef = { plugin: 'task-progress', key: 'animDoneAt' } as const
+const ANIM_DONE_MS = 3000 // the band and the Agents pane both show the done art this long
 const runsRef = { plugin: 'task-progress', key: 'runs' } as const
 const pendingRef = { plugin: 'task-progress', key: 'pending' } as const
 /** True once the person closed the cube pane; cleared by the next new plan. */
@@ -377,8 +382,10 @@ async function releaseTicker($: any, c: Ctx) {
   const { value: progress } = await $.state.get(progressRef)
   const { value: isHidden } = await $.state.get(hiddenRef)
   const { value: runs } = await $.state.get(runsRef)
+  const { value: doneAt } = await $.state.get(animDoneRef)
   const shows = !!progress && !isHidden
-  if (!shows && !(runs && runs.length > 0)) stopTicker(c)
+  const animating = !!doneAt && (await $.clock.now()) - doneAt < ANIM_DONE_MS
+  if (!shows && !(runs && runs.length > 0) && !animating) stopTicker(c)
 }
 
 async function isOn($: any): Promise<boolean> {
@@ -665,6 +672,11 @@ export const register: Register = on => {
       },
     })
     try {
+      await $.command.register({ name: 'tp-agents', description: 'Toggle the animated Agents pane' })
+    } catch {
+      // best effort
+    }
+    try {
       await $.command.register({
         name: 'tp-cubes',
         description: 'Approval cubes: /tp-cubes [panel] | on | off | status',
@@ -904,8 +916,13 @@ export const register: Register = on => {
       await $.state.set(pendingRef, pend.filter(p => !same(p, run)))
       const runs = await getRuns($)
       if (!c.doneIds.includes(id) && !runs.some(r => r.id === id)) {
+        if (runs.length === 0) {
+          // 0 -> 1 running: clear any leftover done art.
+          await $.state.set(animDoneRef, 0)
+        }
         await $.state.set(runsRef, [...runs, { id, ...run }])
         startTicker($, c)
+        if (runs.length === 0) await quiet(autoOpenAgentsPane($))
       }
     }
     await quiet(onAgentSpawn($, e, out))
@@ -920,7 +937,19 @@ export const register: Register = on => {
       if (c.doneIds.length > 50) c.doneIds.shift()
       const runs = await getRuns($)
       if (runs.some(r => r.id === id)) {
-        await $.state.set(runsRef, runs.filter(r => r.id !== id))
+        const rest = runs.filter(r => r.id !== id)
+        await $.state.set(runsRef, rest)
+        if (rest.length === 0) {
+          // Last one out: show the done art for ~3 s, then let the clock stop.
+          await $.state.set(animDoneRef, await $.clock.now())
+          $.clock.after(ANIM_DONE_MS, () => {
+            void (async () => {
+              await $.state.set(animDoneRef, 0)
+              await releaseTicker($, c)
+              await quiet(autoCloseAgentsPane($))
+            })()
+          })
+        }
         await releaseTicker($, c)
       }
     }
@@ -970,8 +999,18 @@ export const register: Register = on => {
   })
 
   // The cube pane: drawn from the stored board; a person's close is remembered until the next new plan.
-  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => renderCubesPane($, e))
-  on('ui.close', { id: PANE_ID }, async ($, e, next) => onCubesPaneClose($, e, next))
+  // One Pane handler and one close handler: they branch on the pane id (cubes, agents).
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId === PANE_ID) return renderCubesPane($, e)
+    if (e.requestId === AGENTS_PANE_ID) return renderAgentsPane($, e, ANIM_DONE_MS)
+    return next(e)
+  })
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE_ID) return onCubesPaneClose($, e, next)
+    if (e.id === AGENTS_PANE_ID) return onAgentsPaneClose($, e, next)
+    return next(e)
+  })
+  on('command.run', { command: 'tp-agents' }, async $ => ({ text: await toggleAgentsPane($) }))
 
   on('command.run', { command: 'orchestrate' }, orchestrateCommand)
   on('command.run', { command: 'tp-orchestrate' }, orchestrateCommand)
@@ -983,27 +1022,57 @@ export const register: Register = on => {
     const { value: isHidden } = await $.state.get(hiddenRef)
     const { value: runs = [] } = await $.state.get(runsRef)
     const showsBar = !!progress && !isHidden
-    if (!showsBar && runs.length === 0) return next(e)
+    const { value: doneAt = 0 } = await $.state.get(animDoneRef)
+    const doneNow = !!doneAt && (await $.clock.now()) - doneAt < ANIM_DONE_MS
+    if (!showsBar && runs.length === 0 && !doneNow) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
     const { value: frame = 0 } = await $.state.get(frameRef)
     const now = await $.clock.now()
 
-    const agentRow =
-      runs.length > 0 ? (
-        <Box>
-          <Text dimColor>⏱ </Text>
+    const width: number = Math.max(20, Number((e as any).props?.bodyColumns) || 80)
+    const { value: snap } = await $.state.get(snapshotRef)
+    const toolOf = (id: string): string | undefined => snap?.agents?.find((a: any) => a.id === id)?.lastTool
+    const isDoneShown = runs.length === 0 && !!doneAt && now - doneAt >= 0 && now - doneAt < ANIM_DONE_MS
+    const asRow = (line: Line, key: string) => (
+      <Box key={key}>
+        {line.map((sp, i) => (
+          <Text key={String(i)} color={sp.color} bold={sp.bold} dimColor={sp.dim}>
+            {sp.text}
+          </Text>
+        ))}
+      </Box>
+    )
+
+    let agentRow: any = null
+    if (isDoneShown) {
+      agentRow = asRow(doneLine(frame, width), 'done')
+    } else if (runs.length > 0) {
+      const firstStart = Math.min(...runs.map(r => r.startedAt))
+      agentRow = (
+        <Box flexDirection="column">
+          {asRow(bandHeader(frame, runs.length, now, firstStart, width), 'head')}
           {runs.map((r, i) => {
             const left = r.startedAt + r.budgetMs - now
             const color = left < 0 ? C_OVER : left < r.budgetMs * (1 - WARN_AT) ? C_WARN : undefined
+            const g = glyph(frame, i)
+            const tool = toolOf(r.id)
+            const main = runLabel(r, i) + ' · ' + formatCountdown(left)
+            // Whatever room the glyph and the countdown leave goes to the verb or tool; the label stays whole.
+            const room = Math.max(0, width - 2 - (g.text.length + 1) - main.length - 3)
+            const what = tool ? '· ' + tool : verbFor(r.id, now)
+            const extra = room > 3 ? (what.length > room ? what.slice(0, room - 1) + '…' : what) : ''
             return (
-              <Text key={r.id} color={color} dimColor={color === undefined}>
-                {(i > 0 ? ' · ' : '') + runLabel(r, i) + ' · ' + formatCountdown(left)}
-              </Text>
+              <Box key={r.id}>
+                <Text color={g.color} bold={g.bold} dimColor={g.dim}>{g.text + ' '}</Text>
+                <Text color={color} dimColor={color === undefined}>{main}</Text>
+                {extra ? <Text dimColor>{'  ' + extra}</Text> : null}
+              </Box>
             )
           })}
         </Box>
-      ) : null
+      )
+    }
 
     if (!progress || !showsBar) return <Box flexDirection="column">{agentRow}</Box>
 
