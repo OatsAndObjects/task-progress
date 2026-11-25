@@ -42,6 +42,8 @@ export type ExecutorRun = {
   budgetMs: number
   /** True once the 80% wrap-up notice has been given. */
   isWarned: boolean
+  /** The agent's role: its subagent type, or 'review' for a `review:` dispatch. Absent on older runs. */
+  type?: string
 }
 
 /** A dispatch seen at `agent.spawn` whose agent id is not known yet. */
@@ -203,6 +205,7 @@ declare module 'claude-code' {
       runs: ExecutorRun[]
       /** Epoch ms when the last agent finished; the done art shows for 3 s after (0 = none). */
       animDoneAt: number
+      animDoneCrew: { id: string; type?: string }[]
       pending: PendingRun[]
       /** True after a person closed the Agents pane; it is not auto-opened again this session. */
       agentsPaneClosed: boolean

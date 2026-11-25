@@ -4,6 +4,7 @@ import type { Cube, CubeBoard } from '../types/index'
 import { buttonsFor, runPaneAction } from './cubes-pane-actions'
 import { buildAgentRows, trunc } from './pane-agents'
 import { buildUsageRows } from './pane-usage'
+import { creatureFor, creatureFrame, doneGlyph } from './anim-frames'
 
 export const PANE_ID = 'tp-cubes'
 export const PANE_TITLE = 'Cubes'
@@ -116,15 +117,21 @@ export function buildCubeRows(board: CubeBoard | null | undefined, openIds: stri
 }
 
 /** Draws the Pane from the stored snapshot. Reading state subscribes, so a board change redraws it. */
-export async function renderCubesPane($: any, e: any) {
+export async function renderCubesPane($: any, e: any, doneMs = 3000) {
   const { Box, Text, Button } = $.ui.resolve(e)
   const { value } = await $.state.get(snapRef)
   const { value: openValue } = await $.state.get({ plugin: 'task-progress', key: 'cubesPaneOpen' })
   const openIds: string[] = Array.isArray(openValue) ? openValue : []
   await $.state.get({ plugin: 'task-progress', key: 'paneTick' }) // subscribe: the poll ticks it while an agent runs
+  // Mascot clock: the same frame ticker, runs and done window the band and Agents pane read (it only ticks while agents run).
+  const { value: frame = 0 } = await $.state.get({ plugin: 'task-progress', key: 'frame' })
+  const { value: runs = [] } = await $.state.get({ plugin: 'task-progress', key: 'runs' })
+  const { value: doneAt = 0 } = await $.state.get({ plugin: 'task-progress', key: 'animDoneAt' })
+  const now: number = await $.clock.now()
+  const inDone = !!doneAt && now - doneAt >= 0 && now - doneAt < doneMs
   const rows = buildCubeRows(value?.cubes, openIds)
-  const agentRows = buildAgentRows(value?.agents, await $.clock.now())
-  const usageRows = buildUsageRows(value, await $.clock.now())
+  const agentRows = buildAgentRows(value?.agents, now)
+  const usageRows = buildUsageRows(value, now)
   const running = agentRows.filter(a => a.state === 'running').length
   return (
     <Box flexDirection="column">
@@ -134,11 +141,23 @@ export async function renderCubesPane($: any, e: any) {
           {agentRows.map((a, i) => (
             <Box key={`ag${i}`} flexDirection="column">
               <Box>
-                <Text color={a.state === 'failed' || a.over ? 'red' : a.state === 'running' ? 'yellow' : 'green'} dimColor={a.state !== 'running'}>{a.glyph} </Text>
-                <Text dimColor={a.state !== 'running'}>{[a.name, a.tag].filter(Boolean).join(' · ')}</Text>
+                {(() => {
+                  const live = a.state === 'running' && Array.isArray(runs) && runs.some((r: any) => r.id === a.id)
+                  const hop = a.state === 'done' && inDone
+                  if (!live && !hop) return <Text color={a.state === 'failed' || a.over ? 'red' : a.state === 'running' ? 'yellow' : 'green'} dimColor={a.state !== 'running'}>{a.glyph.padEnd(5) + ' '}</Text>
+                  const cr = creatureFor(a.type, a.id)
+                  const g = live ? creatureFrame(cr, frame, i * 3) : doneGlyph(frame, cr, i)
+                  return <Text color={g.color} bold={g.bold}>{g.text.slice(0, 6).padEnd(6)}</Text>
+                })()}
+                <Text dimColor={a.state !== 'running'}>{(() => {
+                  // Clip to the pane: 6-col glyph slot + name + tag + time must fit in PANE_COLUMNS.
+                  const tag = a.tag ? ` · ${a.tag}` : ''
+                  const room = Math.max(1, PANE_COLUMNS - 6 - tag.length - (a.time ? ` · ${a.time}`.length : 0))
+                  return (a.name.length > room ? a.name.slice(0, Math.max(0, room - 1)) + '…' : a.name) + tag
+                })()}</Text>
                 {a.time ? <Text color={a.over ? 'red' : undefined}>{` · ${a.time}`}</Text> : null}
               </Box>
-              {a.detail ? <Text dimColor>{`  ${a.detail}`}</Text> : null}
+              {a.detail ? <Text dimColor>{`  ${trunc(a.detail, PANE_COLUMNS - 2)}`}</Text> : null}
             </Box>
           ))}
         </Box>

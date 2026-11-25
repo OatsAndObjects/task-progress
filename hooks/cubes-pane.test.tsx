@@ -205,3 +205,52 @@ test('pane: Agents section on top while an agent runs', async () => {
   expect(all).toContain('executor')
   expect(all.indexOf('Agents')).toBeLessThan(all.indexOf('Cubes ·'))
 })
+
+test('pane: running executor row starts with the animated mascot, not the plain glyph', async () => {
+  const { $ } = fakeEnv([cube('c1', 'running')])
+  const snap: any = await $.state.get({ key: 'snapshot' })
+  await $.state.set({ plugin: 'task-progress', key: 'snapshot' }, { ...snap.value, agents: [{ id: 'a', description: 'build it', type: 'task-progress:executor', status: 'running', startedAt: 0, budgetMin: 5, cube: { id: 'c1', kind: 'build' } }] })
+  await $.state.set({ plugin: 'task-progress', key: 'runs' }, [{ id: 'a', type: 'task-progress:executor', startedAt: 0, budgetMs: 300000, step: 1 }])
+  await $.state.set({ plugin: 'task-progress', key: 'frame' }, 0)
+  const texts: string[] = []
+  const walk = (n: any) => {
+    if (Array.isArray(n)) return n.forEach(walk)
+    if (typeof n === 'string') return void texts.push(n)
+    if (!n || typeof n !== 'object') return
+    walk(n.children)
+  }
+  walk(await renderCubesPane($, {}))
+  expect(texts).toContain('▐▛█▜▌ ')
+  expect(texts).not.toContain('◐ ')
+})
+
+test('pane: done agent row stays within 44 cols and the name does not shift between hop and non-hop frames', async () => {
+  const longType = 'task-progress:' + 'very-long-agent-name-'.repeat(4)
+  const rowFor = async (frame: number) => {
+    const { $ } = fakeEnv([cube('c1', 'running')])
+    const snap: any = await $.state.get({ key: 'snapshot' })
+    await $.state.set({ plugin: 'task-progress', key: 'snapshot' }, { ...snap.value, agents: [{ id: 'a', description: 'x', type: longType, status: 'done', startedAt: 0, endedAt: 1, cube: { id: 'c1', kind: 'build' } }] })
+    await $.state.set({ plugin: 'task-progress', key: 'runs' }, [])
+    await $.state.set({ plugin: 'task-progress', key: 'frame' }, frame)
+    await $.state.set({ plugin: 'task-progress', key: 'animDoneAt' }, 1)
+    const texts: string[] = []
+    const walk = (n: any) => {
+      if (Array.isArray(n)) return n.forEach(walk)
+      if (typeof n === 'string') return void texts.push(n)
+      if (!n || typeof n !== 'object') return
+      walk(n.children)
+    }
+    walk(await renderCubesPane($, {}))
+    const i = texts.findIndex(t => t.includes('very-long'))
+    return { row: texts[i - 1] + texts[i], prefix: texts[i - 1] }
+  }
+  const hop = await rowFor(0)
+  const rest = await rowFor(2)
+  expect(hop.prefix).not.toBe(rest.prefix)
+  expect(hop.row.length).toBeLessThanOrEqual(44)
+  expect(rest.row.length).toBeLessThanOrEqual(44)
+  expect(hop.prefix.length).toBe(6)
+  expect(rest.prefix.length).toBe(6)
+  expect(hop.row.indexOf('very-long')).toBe(rest.row.indexOf('very-long'))
+  expect(hop.row).toContain('…')
+})

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bar, barPosition, buildBar, formatElapsed, formatEta, formatReply, formatStatus, gradient, segmentCount, segmentWidth } from './register'
+import { bar, barPosition, buildBar, formatElapsed, formatEta, formatReply, bandMood, overlayWalker, confettiRow, formatStatus, gradient, segmentCount, segmentWidth } from './register'
 
 const TOOL = 'mcp__task-progress__TaskProgress'
 const BAND = {
@@ -36,7 +36,9 @@ function setup($: any, on: any, startAt = 1_000_000) {
       color: t.props.color,
     }))
     await ui.unmount()
-    const at = texts.findIndex(t => t.text.startsWith('━'))
+    // The bar starts after the meta text (3 leading spaces) and, when done, the confetti row.
+    const meta = texts.findIndex(t => t.text.startsWith('   '))
+    const at = meta < 0 ? -1 : meta + 1 + (texts[meta + 1] && texts[meta + 1]!.text.length > 10 && !texts[meta + 1]!.text.includes('━') && texts[meta + 1]!.color === '#D97757' ? 1 : 0)
     // Newer engines keep their own band row under the plugin's rows: leave it out of the bar.
     const barRuns = at < 0 ? [] : texts.slice(at).filter(t => t.text !== 'ENGINE')
     return {
@@ -105,13 +107,14 @@ test('two rows: title and meta, then the segmented bar', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await call({ task: 'Fix login bug', totalSteps: 7, step: 0 })
   let b = await band()
-  expect(b.row1).toBe('✦ Fix login bug   0/7 · estimating…')
-  expect(b.row2.replace(/ /g, '')).toBe('━'.repeat(35))
+  expect(b.row1).toBe('Fix login bug   0/7 · estimating…')
+  expect(b.row2).toHaveLength(41)
+  expect(/[▐▗]▛█▜[▌▖]/.test(b.row2)).toBe(true)
   await clock.advance(90_000)
   await call({ task: 'Fix login bug', totalSteps: 7, step: 3, label: 'running tests' })
   await clock.advance(1_000)
   b = await band()
-  expect(b.row1).toMatch(/^[✦✧✶] Fix login bug · running tests   3\/7 · ~2m left$/)
+  expect(b.row1).toMatch(/^Fix login bug · running tests   3\/7 · ~2m left$/)
   expect(b.row2).toHaveLength(41)
 })
 
@@ -142,13 +145,10 @@ test('the frame timer runs while a task shows and stops when idle', async ($, on
   await call({ task: 'Ship it', totalSteps: 3, step: 0 })
   await clock.advance(1_200)
   expect(frames()).toBeGreaterThanOrEqual(9)
-  // The sparkle cycles.
-  const seen = new Set<string>()
-  for (let i = 0; i < 8; i++) {
-    seen.add((await band()).row1[0]!)
-    await clock.advance(240)
-  }
-  expect(seen.size).toBeGreaterThan(1)
+  // The mascot walks on the bar, not in the header.
+  const w = await band()
+  expect(w.row1.startsWith('Ship it')).toBe(true)
+  expect(/[▐▗]▛█▜[▌▖]/.test(w.row2)).toBe(true)
   await call({ task: 'Ship it', totalSteps: 3, step: 3, done: true })
   await clock.advance(7_000)
   const during = frames()
@@ -166,10 +166,12 @@ test('done shows a green check and the gradient bar, then the band hides after 8
   await clock.advance(125_000)
   await call({ task: 'Ship it', totalSteps: 3, step: 3, done: true })
   let b = await band()
-  expect(b.row1).toBe('✓ Ship it   done in 2m 5s')
+  expect(b.row1.startsWith('Ship it   done in 2m 5s')).toBe(true)
+  expect(b.row1.length).toBeGreaterThan('Ship it   done in 2m 5s'.length) // confetti row
+  expect(b.row2.endsWith('▐▛█▜▌ ✓')).toBe(true)
   expect(b.runs.every(r => r.color === undefined || r.color !== '#4B5160')).toBe(true)
   await clock.advance(7_000)
-  expect((await band()).row1).toBe('✓ Ship it   done in 2m 5s')
+  expect((await band()).row1.startsWith('Ship it   done in 2m 5s')).toBe(true)
   await clock.advance(1_500)
   expect((await band()).all).toBe('ENGINE')
 })
@@ -239,4 +241,44 @@ test('/progress with another argument prints the usage line', async ($, on) => {
   setup($, on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect((await run($, { command: 'progress', args: 'bogus' })).text).toBe('Usage: /progress  ·  /progress clear')
+})
+
+const rec = (o: Record<string, unknown> = {}) => ({ task: 'T', totalSteps: 4, step: 1, label: '', startedAt: 0, lastStepAt: 10_000, prevStep: 0, prevFill: 0, isDone: false, finishedAt: 0, ...o }) as any
+const text = (cells: { ch: string }[]) => cells.map(c => c.ch).join('')
+
+test('bandMood picks each mood', () => {
+  expect(bandMood(rec({ isDone: true }), { waitingOnUser: true }, 20_000)).toBe('done')
+  expect(bandMood(rec(), { waitingOnUser: true }, 20_000)).toBe('waiting')
+  // 10s per step x 4 = 40s ETA; at 50s we are over
+  expect(bandMood(rec(), { waitingOnUser: false }, 50_000)).toBe('over')
+  // step 0: no ETA, 100s since start -> thinking
+  expect(bandMood(rec({ step: 0, lastStepAt: 0 }), { waitingOnUser: false }, 100_000)).toBe('thinking')
+  expect(bandMood(rec({ step: 0, lastStepAt: 0 }), { waitingOnUser: false }, 5_000)).toBe('working')
+  expect(bandMood(rec(), { waitingOnUser: false }, 20_000)).toBe('working')
+  // on pace but quiet for >90s after a step
+  expect(bandMood(rec({ totalSteps: 20, step: 10, startedAt: 0, lastStepAt: 600_000 }), { waitingOnUser: false }, 700_000)).toBe('thinking')
+})
+
+test('overlayWalker keeps the bar length at every position and size', () => {
+  for (const total of [1, 3, 7, 12, 20]) {
+    const n = segmentCount(total)
+    for (const pos of [0, 0.3, n / 2, n - 0.2, n]) {
+      for (const mood of ['working', 'thinking', 'waiting', 'over', 'done'] as const) {
+        const base = buildBar(total, pos, 3, mood === 'done')
+        const out = overlayWalker(base, pos, total, 3, mood)
+        expect(out.length).toBe(base.length)
+      }
+    }
+  }
+  const base = buildBar(7, 7, 0, true)
+  expect(text(overlayWalker(base, 7, 7, 0, 'done')).endsWith('▐▛█▜▌ ✓')).toBe(true)
+  const mid = text(overlayWalker(buildBar(4, 2, 0, false), 2, 4, 0, 'working'))
+  expect(mid).toContain('▐▛█▜▌')
+  expect(mid.indexOf('▐')).toBeGreaterThan(0)
+  expect(text(overlayWalker(buildBar(4, 0, 0, false), 0, 4, 0, 'working')).startsWith('▐▛█▜▌')).toBe(true)
+})
+
+test('confettiRow is exactly the bar width', () => {
+  for (const w of [0, 1, 20, 47]) expect(confettiRow(5, w).length).toBe(w)
+  expect(confettiRow(0, 30)).not.toBe(confettiRow(3, 30))
 })

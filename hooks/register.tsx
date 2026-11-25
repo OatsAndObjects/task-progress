@@ -23,7 +23,7 @@ import { installedNames, missingDeps } from './deps-check'
 import { AGENTS_PANE_ID, autoCloseAgentsPane, autoOpenAgentsPane, onAgentsPaneClose, renderAgentsPane, toggleAgentsPane } from './agents-pane'
 import { PANE_ID, hasUnfinished, onCubesPaneClose, openCubesPane, renderCubesPane } from './cubes-pane'
 import { buildBoard, checkDescribed, gateCheck, normalizeCube, topoOrder } from './cubes-model'
-import { bandHeader, doneLine, glyph, verbFor, type Line } from './anim-frames'
+import { bandHeader, creatureFor, creatureFrame, doneLine, trail, verbFor, walker, type Line, type Mood } from './anim-frames'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
 
 const PLUGIN = 'task-progress'
@@ -56,7 +56,6 @@ const TICK_MS = 120
 const ANIM_MS = 600
 const BAR_WIDTH = 42
 const MAX_SEGMENTS = 12
-const SPARKLES = ['✦', '✧', '✶', '✧']
 const C_FROM = '#A5B4FC'
 const C_TO = '#0A84FF'
 const C_CURRENT = '#0060DF'
@@ -142,6 +141,7 @@ const approachRef = { plugin: 'task-progress', key: 'approachAsked' } as const
 const planRef = { plugin: 'task-progress', key: 'plan' } as const
 const snapshotRef = { plugin: 'task-progress', key: 'snapshot' } as const
 const animDoneRef = { plugin: 'task-progress', key: 'animDoneAt' } as const
+const doneCrewRef = { plugin: 'task-progress', key: 'animDoneCrew' } as const
 const ANIM_DONE_MS = 3000 // the band and the Agents pane both show the done art this long
 const runsRef = { plugin: 'task-progress', key: 'runs' } as const
 const pendingRef = { plugin: 'task-progress', key: 'pending' } as const
@@ -291,8 +291,60 @@ export function formatReply(p: TaskProgressRecord | null | undefined, now: numbe
   return parts.join(' · ')
 }
 
-export function sparkle(frame: number, isDone: boolean): string {
-  return isDone ? '✓' : SPARKLES[Math.floor(frame / 2) % SPARKLES.length]!
+const THINK_AFTER_MS = 90_000
+const C_DIM_TRAIL = '#6B7280'
+const C_ORANGE = '#D97757'
+
+/** What the bar walker is doing: done, asleep (waiting on the user), over its ETA, thinking, or working. */
+export function bandMood(p: TaskProgressRecord, opts: { waitingOnUser: boolean }, now: number): Mood {
+  if (p.isDone) return 'done'
+  if (opts.waitingOnUser) return 'waiting'
+  if (p.step > 0 && p.step < p.totalSteps && now - p.startedAt > ((p.lastStepAt - p.startedAt) / p.step) * p.totalSteps) return 'over'
+  const since = now - (p.step > 0 ? p.lastStepAt : p.startedAt)
+  return since > THINK_AFTER_MS ? 'thinking' : 'working'
+}
+
+/** Puts the walker where the fill ends, with a sparkle trail behind it. Same length as `cells`. */
+export function overlayWalker(cells: Cell[], pos: number, totalSteps: number, frame: number, mood: Mood): Cell[] {
+  const L = cells.length
+  const out = cells.map(c => ({ ...c }))
+  if (L === 0) return out
+  const n = segmentCount(totalSteps)
+  const w = segmentWidth(n)
+  const spans = walker(frame, mood)
+  const wcells: Cell[] = []
+  for (const s of spans) {
+    const color = s.dim ? C_DIM_TRAIL : (s.color ?? C_TO)
+    for (const ch of s.text) wcells.push({ ch, color })
+  }
+  let fillEnd: number
+  if (mood === 'done' || pos >= n) fillEnd = L
+  else {
+    const seg = Math.min(n - 1, Math.max(0, Math.floor(pos)))
+    const f = clamp01(pos - seg)
+    fillEnd = seg * (w + 1) + (f >= 1 ? w : Math.round(f * w))
+  }
+  const room = Math.min(wcells.length, L)
+  const start = Math.max(0, Math.min(fillEnd, L - room))
+  const tLen = Math.min(4, start)
+  const tStart = start - tLen
+  trail(frame, tLen).forEach((s, i) => {
+    out[tStart + i] = { ch: s.text, color: s.dim ? C_DIM_TRAIL : (s.color ?? C_TO) }
+  })
+  for (let i = 0; i < room; i++) out[start + i] = wcells[i]!
+  return out
+}
+
+/** Sparse animated confetti for the done display, exactly `width` columns. */
+export function confettiRow(frame: number, width: number): string {
+  const n = Math.max(0, Math.floor(width))
+  const marks = ['✻', '·', '˚']
+  let s = ''
+  for (let i = 0; i < n; i++) {
+    const k = (i * 7 + Math.floor(frame / 3) * 5) % 11
+    s += k < 3 ? marks[(i + Math.floor(frame / 2)) % marks.length] : ' '
+  }
+  return s
 }
 
 export type BudgetDecision = { action: 'allow' | 'warn' | 'deny'; leftMs: number }
@@ -357,6 +409,8 @@ type Ctx = {
   frame: number
   /** Agents that finished before their `agent.spawn` answer came back; bounded. */
   doneIds: string[]
+  /** Creatures of runs that finished while others still ran; shown together in the done window. */
+  crew?: { id: string; type?: string }[]
   /** True once our `prompt.compose` hook has run (another plugin may skip it). */
   composeSeen: boolean
   /** True once the rules were attached to a user prompt as a fallback. */
@@ -711,6 +765,7 @@ export const register: Register = on => {
     await $.state.set(hiddenRef, !value || value.isDone)
     // Sub-agents do not outlive a session.
     await $.state.set(runsRef, [])
+    c.crew = []
     await $.state.set(pendingRef, [])
     stopTicker(c)
     if (value && !value.isDone) startTicker($, c)
@@ -905,6 +960,8 @@ export const register: Register = on => {
       budgetMs: Math.round(b.minutes * 60000),
       isWarned: false,
     }
+    const role: string | undefined = b.review?.length ? 'review' : (e.subagent_type ?? e.subagentType) || undefined
+    if (role) run.type = role
     await $.state.set(pendingRef, [...(await getPending($)), run])
     const out: any = await next(e)
     const pend = await getPending($)
@@ -939,7 +996,10 @@ export const register: Register = on => {
       if (runs.some(r => r.id === id)) {
         const rest = runs.filter(r => r.id !== id)
         await $.state.set(runsRef, rest)
+        c.crew = [...(c.crew ?? []).filter(x => x.id !== id), { id, type: runs.find(r => r.id === id)?.type }]
         if (rest.length === 0) {
+          await $.state.set(doneCrewRef, c.crew)
+          c.crew = []
           // Last one out: show the done art for ~3 s, then let the clock stop.
           await $.state.set(animDoneRef, await $.clock.now())
           $.clock.after(ANIM_DONE_MS, () => {
@@ -1001,7 +1061,7 @@ export const register: Register = on => {
   // The cube pane: drawn from the stored board; a person's close is remembered until the next new plan.
   // One Pane handler and one close handler: they branch on the pane id (cubes, agents).
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId === PANE_ID) return renderCubesPane($, e)
+    if (e.requestId === PANE_ID) return renderCubesPane($, e, ANIM_DONE_MS)
     if (e.requestId === AGENTS_PANE_ID) return renderAgentsPane($, e, ANIM_DONE_MS)
     return next(e)
   })
@@ -1046,18 +1106,20 @@ export const register: Register = on => {
 
     let agentRow: any = null
     if (isDoneShown) {
-      agentRow = asRow(doneLine(frame, width), 'done')
+      const { value: crew = [] } = await $.state.get(doneCrewRef)
+      agentRow = asRow(doneLine(frame, width, crew), 'done')
     } else if (runs.length > 0) {
       const firstStart = Math.min(...runs.map(r => r.startedAt))
       agentRow = (
         <Box flexDirection="column">
-          {asRow(bandHeader(frame, runs.length, now, firstStart, width), 'head')}
+          {asRow(bandHeader(frame, runs.map(r => ({ id: r.id, type: r.type })), now, firstStart, width), 'head')}
           {runs.map((r, i) => {
             const left = r.startedAt + r.budgetMs - now
             const color = left < 0 ? C_OVER : left < r.budgetMs * (1 - WARN_AT) ? C_WARN : undefined
-            const g = glyph(frame, i)
+            const cr = creatureFor(r.type, r.id)
+            const g = creatureFrame(cr, frame, i * 3)
             const tool = toolOf(r.id)
-            const main = runLabel(r, i) + ' · ' + formatCountdown(left)
+            const main = cr.name + ' · ' + runLabel(r, i) + ' · ' + formatCountdown(left)
             // Whatever room the glyph and the countdown leave goes to the verb or tool; the label stays whole.
             const room = Math.max(0, width - 2 - (g.text.length + 1) - main.length - 3)
             const what = tool ? '· ' + tool : verbFor(r.id, now)
@@ -1077,7 +1139,10 @@ export const register: Register = on => {
     if (!progress || !showsBar) return <Box flexDirection="column">{agentRow}</Box>
 
     const pos = barPosition(progress, now, frame)
-    const cells = buildBar(progress.totalSteps, pos, frame, progress.isDone)
+    // A stale proposed cube must not keep the walker asleep while an executor is running.
+    const waitingOnUser = runs.length === 0 && !!(snap as any)?.cubes?.cubes?.some?.((x: any) => x.status === 'proposed')
+    const mood = bandMood(progress, { waitingOnUser }, now)
+    const cells = overlayWalker(buildBar(progress.totalSteps, pos, frame, progress.isDone), pos, progress.totalSteps, frame, mood)
 
     // Neighbouring cells of one colour share one Text.
     const colorRuns: { text: string; color: string }[] = []
@@ -1090,11 +1155,11 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Box>
-          <Text color={progress.isDone ? 'green' : C_TO}>{sparkle(frame, progress.isDone)} </Text>
           <Text bold>{progress.task}</Text>
           {progress.label && !progress.isDone ? <Text> · {progress.label}</Text> : null}
           <Text dimColor>{'   ' + formatMeta(progress, now)}</Text>
         </Box>
+        {progress.isDone ? <Text color={C_ORANGE}>{confettiRow(frame, cells.length)}</Text> : null}
         <Box>
           {colorRuns.map((r, i) => (r.color ? <Text key={String(i)} color={r.color}>{r.text}</Text> : <Text key={String(i)}>{r.text}</Text>))}
         </Box>

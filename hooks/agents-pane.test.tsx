@@ -62,6 +62,18 @@ test('the pane draws art plus one row per running agent', async ($, on) => {
   expect(t.length).toBeGreaterThan(4) // art lines, then the two agent rows
 })
 
+test('runs remember their role: each type shows its own creature name', async ($, on) => {
+  const { texts, start } = setup($, on)
+  await start()
+  await $.agent.spawn({ prompt: '[budget: 4m step: 1]\nx', description: 'a', subagentType: 'task-progress:executor' })
+  await $.agent.spawn({ prompt: '[budget: 4m step: 2]\nx', description: 'b', subagentType: 'feature-dev:code-explorer' })
+  await $.agent.spawn({ prompt: '[budget: 4m step: 3 review: c1]\nx', description: 'c', subagentType: 'task-progress:executor' })
+  const t = (await texts()).join('|')
+  expect(t).toContain('Builder')
+  expect(t).toContain('Scout')
+  expect(t).toContain('Reviewer')
+})
+
 test('idle pane says so', async ($, on) => {
   const { texts, start } = setup($, on)
   await start()

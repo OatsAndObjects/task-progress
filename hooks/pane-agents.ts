@@ -2,6 +2,9 @@
 import type { SnapshotAgent } from '../types/index'
 
 export type AgentRow = {
+  id: string
+  /** Agent type as stored, e.g. `task-progress:executor` (picks the mascot). */
+  type: string
   glyph: '◐' | '✓' | '✗'
   /** Short type, e.g. `executor` (a `plugin:` prefix is dropped). */
   name: string
@@ -29,6 +32,8 @@ export function buildAgentRows(agents: SnapshotAgent[] | null | undefined, now: 
   const make = (a: SnapshotAgent, state: AgentRow['state']): AgentRow => {
     const left = a.budgetMin !== undefined && state === 'running' ? a.startedAt + a.budgetMin * 60000 - now : undefined
     return {
+      id: a.id,
+      type: a.type,
       glyph: state === 'running' ? '◐' : state === 'done' ? '✓' : '✗',
       name: a.type.split(':').pop() || a.type,
       tag: a.cube ? a.cube.id : a.step !== undefined ? `step ${a.step}` : undefined,

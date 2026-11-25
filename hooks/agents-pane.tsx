@@ -20,7 +20,7 @@ export function toAnimAgents(runs: ExecutorRun[], snap: Snapshot | null | undefi
     const s = snap?.agents?.find(a => a.id === r.id)
     const base = r.step !== null ? `step ${r.step}` : `agent ${i + 1}`
     const task = (s?.description ?? '').replace(/\s+/g, ' ').trim()
-    return { id: r.id, label: task ? `${base} · ${task}` : base, startedAt: r.startedAt, budgetMs: r.budgetMs, lastTool: s?.lastTool }
+    return { id: r.id, label: task ? `${base} · ${task}` : base, startedAt: r.startedAt, budgetMs: r.budgetMs, lastTool: s?.lastTool, type: r.type }
   })
 }
 
