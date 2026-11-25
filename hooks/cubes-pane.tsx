@@ -2,15 +2,65 @@
 // the render and open helpers are the only parts that touch the engine.
 import type { Cube, CubeBoard } from '../types/index'
 import { buttonsFor, runPaneAction } from './cubes-pane-actions'
-import { buildAgentRows, trunc } from './pane-agents'
+import { buildAgentRows, trunc, type AgentRow } from './pane-agents'
 import { buildUsageRows } from './pane-usage'
-import { creatureFor, creatureFrame, doneGlyph } from './anim-frames'
+import { forgetToolClock, sceneRows, toolSinceOf, FAIL_MS, SLOT_W, MASCOT_COLOR } from './anim-frames'
 
 export const PANE_ID = 'tp-cubes'
 export const PANE_TITLE = 'Cubes'
 /** Body columns asked for while docked beside the transcript. */
 export const PANE_COLUMNS = 44
 const TITLE_MAX = 36
+/** Text columns beside the 13-col mascot slot (44 - 13 = 31). */
+const TEXT_W = PANE_COLUMNS - SLOT_W
+
+export type AgentLine = {
+  /** The 13-col slot: a mascot line, or the glyph / blanks for a one-line row. */
+  slot: string
+  mascot: boolean
+  text: string
+  /** Right-aligned-after-text time chip; counts toward the width. */
+  time?: string
+  over?: boolean
+  dim?: boolean
+}
+
+/** One Agents-section entry as lines. Animating agents (live, or done inside the done window) are 3 lines:
+ *  mascot slot + text (line 1 empty, line 2 name · tag, line 3 tool · time). Others are one line plus a detail line,
+ *  with text aligned to the mascot rows' text column. Every line fits PANE_COLUMNS. */
+export function buildAgentBlock(a: AgentRow, anim: 'run' | 'done' | 'fail' | null, frame: number, i: number, t: { now?: number; doneAt?: number } = {}): AgentLine[] {
+  const nameTag = (n: number) => {
+    const tag = a.tag ? ` · ${a.tag}` : ''
+    const room = Math.max(1, n - tag.length)
+    return trunc(a.name, room) + tag
+  }
+  const clip = (t: string) => trunc(t, TEXT_W)
+  if (anim) {
+    const now = t.now ?? 0
+    const slots = sceneRows({
+      tick: frame,
+      seed: i * 3,
+      now,
+      tool: a.tool,
+      startedAt: t.now !== undefined ? a.startedAt : undefined,
+      toolSince: t.now !== undefined && a.startedAt !== undefined && anim === 'run' ? toolSinceOf(a.id, a.tool, now, a.startedAt) : undefined,
+      doneAt: anim === 'done' ? (t.doneAt ?? now) : undefined,
+      failedAt: anim === 'fail' ? (a.endedAt ?? now) : undefined,
+    })
+    const timeChip = a.time ? ` · ${a.time}` : ''
+    return [
+      { slot: slots[0]!, mascot: true, text: '' },
+      { slot: slots[1]!, mascot: true, text: clip(nameTag(TEXT_W)), dim: anim === 'done' || anim === 'fail' },
+      { slot: slots[2]!, mascot: true, text: trunc(a.detail ?? '', Math.max(0, TEXT_W - timeChip.length)), time: timeChip || undefined, over: a.over, dim: true },
+    ]
+  }
+  const timeChip = a.time ? ` · ${a.time}` : ''
+  const out: AgentLine[] = [
+    { slot: a.glyph.padEnd(SLOT_W), mascot: false, text: clip(nameTag(Math.max(1, TEXT_W - timeChip.length))), time: timeChip || undefined, over: a.over, dim: a.state !== 'running' },
+  ]
+  if (a.detail) out.push({ slot: ' '.repeat(SLOT_W), mascot: false, text: trunc(a.detail, TEXT_W), dim: true })
+  return out
+}
 const snapRef = { plugin: 'task-progress', key: 'snapshot' } as const
 
 const FINISHED = ['done', 'skipped', 'rejected']
@@ -123,6 +173,7 @@ export async function renderCubesPane($: any, e: any, doneMs = 3000) {
   const { value: openValue } = await $.state.get({ plugin: 'task-progress', key: 'cubesPaneOpen' })
   const openIds: string[] = Array.isArray(openValue) ? openValue : []
   await $.state.get({ plugin: 'task-progress', key: 'paneTick' }) // subscribe: the poll ticks it while an agent runs
+  await $.state.get({ plugin: 'task-progress', key: 'animFailAt' }) // subscribe: clearing it redraws the failed row
   // Mascot clock: the same frame ticker, runs and done window the band and Agents pane read (it only ticks while agents run).
   const { value: frame = 0 } = await $.state.get({ plugin: 'task-progress', key: 'frame' })
   const { value: runs = [] } = await $.state.get({ plugin: 'task-progress', key: 'runs' })
@@ -138,28 +189,27 @@ export async function renderCubesPane($: any, e: any, doneMs = 3000) {
       {agentRows.length > 0 ? (
         <Box flexDirection="column" marginBottom={1}>
           <Text bold>{`Agents · ${running} running`}</Text>
-          {agentRows.map((a, i) => (
-            <Box key={`ag${i}`} flexDirection="column">
-              <Box>
-                {(() => {
-                  const live = a.state === 'running' && Array.isArray(runs) && runs.some((r: any) => r.id === a.id)
-                  const hop = a.state === 'done' && inDone
-                  if (!live && !hop) return <Text color={a.state === 'failed' || a.over ? 'red' : a.state === 'running' ? 'yellow' : 'green'} dimColor={a.state !== 'running'}>{a.glyph.padEnd(5) + ' '}</Text>
-                  const cr = creatureFor(a.type, a.id)
-                  const g = live ? creatureFrame(cr, frame, i * 3) : doneGlyph(frame, cr, i)
-                  return <Text color={g.color} bold={g.bold}>{g.text.slice(0, 6).padEnd(6)}</Text>
-                })()}
-                <Text dimColor={a.state !== 'running'}>{(() => {
-                  // Clip to the pane: 6-col glyph slot + name + tag + time must fit in PANE_COLUMNS.
-                  const tag = a.tag ? ` · ${a.tag}` : ''
-                  const room = Math.max(1, PANE_COLUMNS - 6 - tag.length - (a.time ? ` · ${a.time}`.length : 0))
-                  return (a.name.length > room ? a.name.slice(0, Math.max(0, room - 1)) + '…' : a.name) + tag
-                })()}</Text>
-                {a.time ? <Text color={a.over ? 'red' : undefined}>{` · ${a.time}`}</Text> : null}
+          {agentRows.map((a, i) => {
+            const live = a.state === 'running' && Array.isArray(runs) && runs.some((r: any) => r.id === a.id)
+            if (a.state !== 'running') forgetToolClock(a.id)
+            const hop = a.state === 'done' && inDone && a.endedAt !== undefined && now - a.endedAt >= 0 && now - a.endedAt < doneMs
+            const fail = a.state === 'failed' && a.endedAt !== undefined && now - a.endedAt >= 0 && now - a.endedAt < FAIL_MS
+            return (
+              <Box key={`ag${i}`} flexDirection="column">
+                {buildAgentBlock(a, live ? 'run' : hop ? 'done' : fail ? 'fail' : null, frame, i, { now, doneAt }).map((l, j) => (
+                  <Box key={`al${j}`}>
+                    {l.mascot ? (
+                      <Text color={MASCOT_COLOR} bold>{l.slot}</Text>
+                    ) : (
+                      <Text color={a.state === 'failed' || a.over ? 'red' : a.state === 'running' ? 'yellow' : 'green'} dimColor={a.state !== 'running'}>{l.slot}</Text>
+                    )}
+                    <Text dimColor={l.dim}>{l.text}</Text>
+                    {l.time ? <Text color={l.over ? 'red' : undefined}>{l.time}</Text> : null}
+                  </Box>
+                ))}
               </Box>
-              {a.detail ? <Text dimColor>{`  ${trunc(a.detail, PANE_COLUMNS - 2)}`}</Text> : null}
-            </Box>
-          ))}
+            )
+          })}
         </Box>
       ) : null}
       {rows.map((r, i) => {

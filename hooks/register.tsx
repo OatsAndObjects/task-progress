@@ -23,7 +23,7 @@ import { installedNames, missingDeps } from './deps-check'
 import { AGENTS_PANE_ID, autoCloseAgentsPane, autoOpenAgentsPane, clearAgentsPaneHold, onAgentsPaneClose, openAgentsPaneForPlan, releaseAgentsPaneHold, renderAgentsPane, toggleAgentsPane } from './agents-pane'
 import { PANE_ID, hasUnfinished, onCubesPaneClose, openCubesPane, renderCubesPane } from './cubes-pane'
 import { buildBoard, checkDescribed, gateCheck, normalizeCube, topoOrder } from './cubes-model'
-import { bandHeader, creatureFor, creatureFrame, doneLine, trail, verbFor, walker, type Line, type Mood } from './anim-frames'
+import { FAIL_MS, bandHeader, creatureFor, doneLine, glyph, trail, verbFor, walker, type Line, type Mood } from './anim-frames'
 import type { ExecutorRun, PendingRun, TaskPlanRecord, TaskProgressRecord } from '../types/index'
 
 const PLUGIN = 'task-progress'
@@ -141,6 +141,7 @@ const approachRef = { plugin: 'task-progress', key: 'approachAsked' } as const
 const planRef = { plugin: 'task-progress', key: 'plan' } as const
 const snapshotRef = { plugin: 'task-progress', key: 'snapshot' } as const
 const animDoneRef = { plugin: 'task-progress', key: 'animDoneAt' } as const
+const animFailRef = { plugin: 'task-progress', key: 'animFailAt' } as const
 const doneCrewRef = { plugin: 'task-progress', key: 'animDoneCrew' } as const
 const ANIM_DONE_MS = 3000 // the band and the Agents pane both show the done art this long
 const runsRef = { plugin: 'task-progress', key: 'runs' } as const
@@ -438,8 +439,12 @@ async function releaseTicker($: any, c: Ctx) {
   const { value: runs } = await $.state.get(runsRef)
   const { value: doneAt } = await $.state.get(animDoneRef)
   const shows = !!progress && !isHidden
-  const animating = !!doneAt && (await $.clock.now()) - doneAt < ANIM_DONE_MS
-  if (!shows && !(runs && runs.length > 0) && !animating) stopTicker(c)
+  const { value: failAt } = await $.state.get(animFailRef)
+  const now: number = await $.clock.now()
+  const animating = !!doneAt && now - doneAt < ANIM_DONE_MS
+  // A fail shake needs the clock for FAIL_MS (+ one tick) even when no run is left.
+  const shaking = !!failAt && now - failAt < FAIL_MS + TICK_MS
+  if (!shows && !(runs && runs.length > 0) && !animating && !shaking) stopTicker(c)
 }
 
 async function isOn($: any): Promise<boolean> {
@@ -581,6 +586,19 @@ async function orchestrateCommand($: any, e: any) {
 
 export const register: Register = on => {
   const c: Ctx = { clearTimer: undefined, ticker: undefined, frame: 0, doneIds: [], composeSeen: false, rulesSent: false }
+  // The dashboard poll stamps a failed agent; keep the clock running for its shake, then redraw once to the failed row.
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'task-progress' && e.key === 'animFailAt' && e.value) {
+      startTicker($, c)
+      $.clock.after(FAIL_MS + TICK_MS, () => {
+        void (async () => {
+          await $.state.set(animFailRef, 0)
+          await releaseTicker($, c)
+        })()
+      })
+    }
+    return next(e)
+  })
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'progress',
@@ -1125,7 +1143,7 @@ export const register: Register = on => {
             const left = r.startedAt + r.budgetMs - now
             const color = left < 0 ? C_OVER : left < r.budgetMs * (1 - WARN_AT) ? C_WARN : undefined
             const cr = creatureFor(r.type, r.id)
-            const g = creatureFrame(cr, frame, i * 3)
+            const g = glyph(frame, i * 3)
             const tool = toolOf(r.id)
             const main = cr.name + ' · ' + runLabel(r, i) + ' · ' + formatCountdown(left)
             // Whatever room the glyph and the countdown leave goes to the verb or tool; the label stays whole.

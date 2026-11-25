@@ -109,7 +109,7 @@ test('two rows: title and meta, then the segmented bar', async ($, on) => {
   let b = await band()
   expect(b.row1).toBe('Fix login bug   0/7 · estimating…')
   expect(b.row2).toHaveLength(41)
-  expect(/[▐▗]▛█▜[▌▖]/.test(b.row2)).toBe(true)
+  expect(/[✦✧⋆]/.test(b.row2)).toBe(true)
   await clock.advance(90_000)
   await call({ task: 'Fix login bug', totalSteps: 7, step: 3, label: 'running tests' })
   await clock.advance(1_000)
@@ -145,10 +145,11 @@ test('the frame timer runs while a task shows and stops when idle', async ($, on
   await call({ task: 'Ship it', totalSteps: 3, step: 0 })
   await clock.advance(1_200)
   expect(frames()).toBeGreaterThanOrEqual(9)
-  // The mascot walks on the bar, not in the header.
+  // A twinkling star (no mascot) walks on the bar, not in the header.
   const w = await band()
   expect(w.row1.startsWith('Ship it')).toBe(true)
-  expect(/[▐▗]▛█▜[▌▖]/.test(w.row2)).toBe(true)
+  expect(/[✦✧⋆]/.test(w.row2)).toBe(true)
+  expect(/[▐▛▜▌▝▘]/.test(w.all)).toBe(false)
   await call({ task: 'Ship it', totalSteps: 3, step: 3, done: true })
   await clock.advance(7_000)
   const during = frames()
@@ -168,7 +169,7 @@ test('done shows a green check and the gradient bar, then the band hides after 8
   let b = await band()
   expect(b.row1.startsWith('Ship it   done in 2m 5s')).toBe(true)
   expect(b.row1.length).toBeGreaterThan('Ship it   done in 2m 5s'.length) // confetti row
-  expect(b.row2.endsWith('▐▛█▜▌ ✓')).toBe(true)
+  expect(/✓ [✦⋆]$/.test(b.row2)).toBe(true)
   expect(b.runs.every(r => r.color === undefined || r.color !== '#4B5160')).toBe(true)
   await clock.advance(7_000)
   expect((await band()).row1.startsWith('Ship it   done in 2m 5s')).toBe(true)
@@ -271,14 +272,54 @@ test('overlayWalker keeps the bar length at every position and size', () => {
     }
   }
   const base = buildBar(7, 7, 0, true)
-  expect(text(overlayWalker(base, 7, 7, 0, 'done')).endsWith('▐▛█▜▌ ✓')).toBe(true)
+  expect(/✓ [✦⋆]$/.test(text(overlayWalker(base, 7, 7, 0, 'done')))).toBe(true)
   const mid = text(overlayWalker(buildBar(4, 2, 0, false), 2, 4, 0, 'working'))
-  expect(mid).toContain('▐▛█▜▌')
-  expect(mid.indexOf('▐')).toBeGreaterThan(0)
-  expect(text(overlayWalker(buildBar(4, 0, 0, false), 0, 4, 0, 'working')).startsWith('▐▛█▜▌')).toBe(true)
+  expect(/[✦✧⋆]/.test(mid)).toBe(true)
+  expect(mid.search(/[✦✧⋆]/)).toBeGreaterThan(0)
+  expect(/^[✦✧⋆]/.test(text(overlayWalker(buildBar(4, 0, 0, false), 0, 4, 0, 'working')))).toBe(true)
 })
 
 test('confettiRow is exactly the bar width', () => {
   for (const w of [0, 1, 20, 47]) expect(confettiRow(5, w).length).toBe(w)
   expect(confettiRow(0, 30)).not.toBe(confettiRow(3, 30))
+})
+
+test('band never shows the mascot: no ▐▛▜▌▝▘ in any frame, only star / dot / check markers', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>ENGINE</Text>
+  })
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('tool.register', () => ({ value: { tool: TOOL } }))
+  on('command.register', () => ({ value: { command: 'progress' } }))
+  on('tool.call', () => ({ result: {} }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('agent.spawn', () => ({ model: 'sonnet', agentId: 'a1' }))
+  on('turn.complete', (_: any, e: any) => ({ text: String(e.answer ?? '') }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const lines = async () => {
+    const ui = await $.ui.mount(BAND)
+    const t: string[] = (await ui.findAll({ type: 'Text' })).map((x: any) => x.text)
+    await ui.unmount()
+    return t
+  }
+  const MASCOT = /[▐▛▜▌▝▘]/
+  const frameText = async () => (await lines()).join('|')
+  await $.tool.call({ tool: TOOL, task: 'Ship it', totalSteps: 3, step: 0 })
+  expect(MASCOT.test(await frameText())).toBe(false)
+  await $.agent.spawn({ prompt: '[budget: 4m step: 1]\nx', description: 'a', subagentType: 'task-progress:executor' })
+  for (let k = 0; k < 40; k++) {
+    const f = await frameText()
+    expect(MASCOT.test(f)).toBe(false)
+    expect(/[✦✧⋆·]/.test(f)).toBe(true)
+    await clock.advance(250)
+  }
+  await $.turn.complete({ agentId: 'a1', reason: 'answer', answer: 'x' } as any)
+  for (let k = 0; k < 14; k++) {
+    const f = await frameText()
+    expect(MASCOT.test(f)).toBe(false) // done window: green check, no heads
+    await clock.advance(250)
+  }
+  expect(MASCOT.test(await frameText())).toBe(false)
 })

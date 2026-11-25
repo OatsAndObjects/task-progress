@@ -16,6 +16,10 @@ export type AgentRow = {
   /** Second line, dimmed: its last tool call, else its description. */
   detail?: string
   state: 'running' | 'done' | 'failed'
+  /** Raw last tool summary (picks the mascot scene), and the run's start / end times. */
+  tool?: string
+  startedAt?: number
+  endedAt?: number
 }
 
 const DETAIL_MAX = 40
@@ -41,6 +45,9 @@ export function buildAgentRows(agents: SnapshotAgent[] | null | undefined, now: 
       over: left !== undefined && left < 0,
       detail: (a.lastTool || a.description) ? trunc((a.lastTool || a.description).replace(/\s+/g, ' ').trim(), DETAIL_MAX) : undefined,
       state,
+      tool: a.lastTool,
+      startedAt: a.startedAt,
+      endedAt: a.endedAt,
     }
   }
   const running = list.filter(a => a.status === 'running').map(a => make(a, 'running'))

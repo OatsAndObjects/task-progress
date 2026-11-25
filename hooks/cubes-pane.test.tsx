@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { emptySnapshot } from './dashboard-model'
-import { buildCubeRows, hasUnfinished, onCubesPaneClose, renderCubesPane } from './cubes-pane'
+import { buildAgentBlock, buildCubeRows, hasUnfinished, onCubesPaneClose, renderCubesPane } from './cubes-pane'
 
 const INPUTS = 'mcp__task-progress__TaskInputs'
 const PLAN = 'mcp__task-progress__TaskPlan'
@@ -206,7 +206,7 @@ test('pane: Agents section on top while an agent runs', async () => {
   expect(all.indexOf('Agents')).toBeLessThan(all.indexOf('Cubes ·'))
 })
 
-test('pane: running executor row starts with the animated mascot, not the plain glyph', async () => {
+test('pane: running executor row starts with the animated mascot scene, not the plain glyph', async () => {
   const { $ } = fakeEnv([cube('c1', 'running')])
   const snap: any = await $.state.get({ key: 'snapshot' })
   await $.state.set({ plugin: 'task-progress', key: 'snapshot' }, { ...snap.value, agents: [{ id: 'a', description: 'build it', type: 'task-progress:executor', status: 'running', startedAt: 0, budgetMin: 5, cube: { id: 'c1', kind: 'build' } }] })
@@ -220,19 +220,43 @@ test('pane: running executor row starts with the animated mascot, not the plain 
     walk(n.children)
   }
   walk(await renderCubesPane($, {}))
-  expect(texts).toContain('▐▛█▜▌ ')
-  expect(texts).not.toContain('◐ ')
+  expect(texts.some(t => t.includes('▐▛███▜▌'))).toBe(true)
+  expect(texts.includes('◐'.padEnd(13))).toBe(false)
 })
 
-test('pane: done agent row stays within 44 cols and the name does not shift between hop and non-hop frames', async () => {
-  const longType = 'task-progress:' + 'very-long-agent-name-'.repeat(4)
-  const rowFor = async (frame: number) => {
+test('pane: an animating agent is 3 lines, each within 44 cols, text after the 13-col slot', () => {
+  const ag: any = { id: 'a', type: 'task-progress:' + 'very-long-agent-name-'.repeat(4), glyph: '◐', name: 'very-long-agent-name-'.repeat(4), tag: 'c1', time: '3:20 left', detail: 'Edit ' + 'x'.repeat(60), state: 'running' }
+  for (const anim of ['run', 'done', 'fail'] as const) for (let frame = 0; frame < 40; frame += 2) {
+    const ls = buildAgentBlock(ag, anim, frame, 0)
+    expect(ls.length).toBe(3)
+    expect(ls[0]!.text).toBe('')
+    for (const l of ls) {
+      expect(l.slot.length).toBe(13)
+      expect(l.slot.length + l.text.length + (l.time?.length ?? 0)).toBeLessThanOrEqual(44)
+      expect(l.text.length).toBeLessThanOrEqual(31)
+    }
+    expect(ls[1]!.text).toContain('…')
+    expect(ls[2]!.time).toBe(' · 3:20 left')
+  }
+})
+
+test('pane: non-animating agents keep one-line rows aligned to the mascot text column', () => {
+  const ag: any = { id: 'a', type: 'executor', glyph: '✗', name: 'executor', tag: 'c1', detail: 'boom', state: 'failed' }
+  const ls = buildAgentBlock(ag, null, 0, 0)
+  expect(ls.length).toBe(2)
+  expect(ls[0]!.slot).toBe('✗'.padEnd(13))
+  expect(ls[1]!.slot).toBe(' '.repeat(13))
+  expect(ls.every(l => !l.mascot)).toBe(true)
+})
+
+test('pane: done agent inside the done window hops with the mascot; outside it is a one-line check', async () => {
+  const rowsFor = async (doneAt: number) => {
     const { $ } = fakeEnv([cube('c1', 'running')])
     const snap: any = await $.state.get({ key: 'snapshot' })
-    await $.state.set({ plugin: 'task-progress', key: 'snapshot' }, { ...snap.value, agents: [{ id: 'a', description: 'x', type: longType, status: 'done', startedAt: 0, endedAt: 1, cube: { id: 'c1', kind: 'build' } }] })
+    await $.state.set({ plugin: 'task-progress', key: 'snapshot' }, { ...snap.value, agents: [{ id: 'a', description: 'x', type: 'task-progress:executor', status: 'done', startedAt: 0, endedAt: 1, cube: { id: 'c1', kind: 'build' } }] })
     await $.state.set({ plugin: 'task-progress', key: 'runs' }, [])
-    await $.state.set({ plugin: 'task-progress', key: 'frame' }, frame)
-    await $.state.set({ plugin: 'task-progress', key: 'animDoneAt' }, 1)
+    await $.state.set({ plugin: 'task-progress', key: 'frame' }, 0)
+    await $.state.set({ plugin: 'task-progress', key: 'animDoneAt' }, doneAt)
     const texts: string[] = []
     const walk = (n: any) => {
       if (Array.isArray(n)) return n.forEach(walk)
@@ -241,16 +265,11 @@ test('pane: done agent row stays within 44 cols and the name does not shift betw
       walk(n.children)
     }
     walk(await renderCubesPane($, {}))
-    const i = texts.findIndex(t => t.includes('very-long'))
-    return { row: texts[i - 1] + texts[i], prefix: texts[i - 1] }
+    return texts
   }
-  const hop = await rowFor(0)
-  const rest = await rowFor(2)
-  expect(hop.prefix).not.toBe(rest.prefix)
-  expect(hop.row.length).toBeLessThanOrEqual(44)
-  expect(rest.row.length).toBeLessThanOrEqual(44)
-  expect(hop.prefix.length).toBe(6)
-  expect(rest.prefix.length).toBe(6)
-  expect(hop.row.indexOf('very-long')).toBe(rest.row.indexOf('very-long'))
-  expect(hop.row).toContain('…')
+  const inWin = await rowsFor(1)
+  expect(inWin.some(t => t.includes('▝▜█████▛▘'))).toBe(true)
+  const out = await rowsFor(-5000)
+  expect(out.some(t => t.includes('▝▜█████▛▘'))).toBe(false)
+  expect(out.some(t => t.startsWith('✓'))).toBe(true)
 })

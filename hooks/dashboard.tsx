@@ -114,6 +114,13 @@ async function runContextThenClear($: any) {
 function put($: any, s: Snapshot) {
   if (s === c.snap) return
   const was = allCubesDone(c.snap?.cubes)
+  const hadFailed = new Set((c.snap?.agents ?? []).filter(a => a.status === 'failed').map(a => a.id))
+  if (c.snap && s.agents.some(a => a.status === 'failed' && !hadFailed.has(a.id))) {
+    // register.tsx sees this write (state.set hook) and keeps its frame clock running for the shake.
+    void (async () => {
+      await $.state.set({ plugin: 'task-progress', key: 'animFailAt' }, await $.clock.now())
+    })()
+  }
   c.snap = s
   if (!was && allCubesDone(s.cubes) && !ctx.fired) {
     ctx.fired = true
