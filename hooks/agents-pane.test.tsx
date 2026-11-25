@@ -141,3 +141,71 @@ test('a person close event is remembered, another origin is not', async () => {
   await onAgentsPaneClose(fake, { id: 'tp-agents', origin: { kind: 'person' } }, next)
   expect(store.agentsPaneClosed).toBe(true)
 })
+
+const PLAN = 'mcp__task-progress__TaskPlan'
+const PROGRESS = 'mcp__task-progress__TaskProgress'
+const STEPS = [{ title: 'a', minutes: 2 }]
+
+test('a steps-only TaskPlan opens both the Cubes and Agents panes', async ($, on) => {
+  const { opens, start } = setup($, on)
+  await start()
+  await $.tool.call({ tool: PLAN, task: 'T', steps: STEPS })
+  expect(opens.filter(x => x.id === 'tp-cubes').length).toBe(1)
+  expect(opens.filter(x => x.id === 'tp-agents').length).toBe(1)
+})
+
+test('a quick prompt with no TaskPlan opens nothing', async ($, on) => {
+  const { opens, start } = setup($, on)
+  await start()
+  await $.tool.call({ tool: PROGRESS, task: 'T', totalSteps: 1, step: 0 })
+  expect(opens.length).toBe(0)
+})
+
+test('a person-closed pane reopens on the next TaskPlan', async ($, on) => {
+  const { opens, start } = setup($, on)
+  await start()
+  await $.tool.call({ tool: PLAN, task: 'T', steps: STEPS })
+  await $.command.run({ command: 'tp-agents' }) // person closes the Agents pane
+  await $.tool.call({ tool: PLAN, task: 'T2', steps: STEPS })
+  expect(opens.filter(x => x.id === 'tp-agents').length).toBe(2)
+  expect(opens.filter(x => x.id === 'tp-cubes').length).toBe(2)
+})
+
+test('a plan-opened Agents pane stays open after agents finish, and closes when the task is done', async ($, on) => {
+  const { clock, closes, dispatch, start, finish } = setup($, on)
+  await start()
+  await $.tool.call({ tool: PLAN, task: 'T', steps: STEPS })
+  await dispatch(1)
+  await finish('a1')
+  await clock.advance(10_000)
+  expect(mine(closes).length).toBe(0)
+  await $.tool.call({ tool: PROGRESS, task: 'T', totalSteps: 1, step: 1, done: true })
+  expect(mine(closes).length).toBe(1)
+})
+
+
+const again = (source: string) => ({ cwd: '/', surface: 'terminal', isInteractive: true, source }) as any
+
+async function holdScenario($: any, on: any, source: string, progress: boolean) {
+  const { clock, closes, dispatch, start, finish } = setup($, on)
+  await start()
+  await $.tool.call({ tool: PLAN, task: 'T', steps: STEPS })
+  if (progress) await $.tool.call({ tool: PROGRESS, task: 'T', totalSteps: 2, step: 1 })
+  await $.session.start(again(source))
+  await dispatch(1)
+  await finish('a1')
+  await clock.advance(10_000)
+  return mine(closes).length
+}
+
+test('session.start clear drops a stale hold, so an agent-opened pane auto-closes', async ($, on) => {
+  expect(await holdScenario($, on, 'clear', false)).toBeGreaterThan(0)
+})
+
+test('session.start startup drops a stale hold', async ($, on) => {
+  expect(await holdScenario($, on, 'startup', false)).toBeGreaterThan(0)
+})
+
+test('session.start resume with unfinished progress keeps the hold', async ($, on) => {
+  expect(await holdScenario($, on, 'resume', true)).toBe(0)
+})

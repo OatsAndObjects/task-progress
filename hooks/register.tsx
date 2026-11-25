@@ -20,7 +20,7 @@ import {
 } from './dashboard'
 import { parseBudget } from './dashboard-model'
 import { installedNames, missingDeps } from './deps-check'
-import { AGENTS_PANE_ID, autoCloseAgentsPane, autoOpenAgentsPane, onAgentsPaneClose, renderAgentsPane, toggleAgentsPane } from './agents-pane'
+import { AGENTS_PANE_ID, autoCloseAgentsPane, autoOpenAgentsPane, clearAgentsPaneHold, onAgentsPaneClose, openAgentsPaneForPlan, releaseAgentsPaneHold, renderAgentsPane, toggleAgentsPane } from './agents-pane'
 import { PANE_ID, hasUnfinished, onCubesPaneClose, openCubesPane, renderCubesPane } from './cubes-pane'
 import { buildBoard, checkDescribed, gateCheck, normalizeCube, topoOrder } from './cubes-model'
 import { bandHeader, creatureFor, creatureFrame, doneLine, trail, verbFor, walker, type Line, type Mood } from './anim-frames'
@@ -482,6 +482,7 @@ async function applyProgress(
   await quiet(dashProgress($, { task: a.task, step: a.step, totalSteps: a.totalSteps, label: a.label, done: a.done }))
   startTicker($, c)
   if (a.done) {
+    await quiet(releaseAgentsPaneHold($))
     c.clearTimer = $.clock.after(CLEAR_AFTER_MS, () => {
       c.clearTimer = undefined
       void (async () => {
@@ -763,6 +764,9 @@ export const register: Register = on => {
     const { value } = await $.state.get(progressRef)
     // A finished task from an earlier session stays hidden; an unfinished one is drawn again.
     await $.state.set(hiddenRef, !value || value.isDone)
+    // The agents-pane hold lasts only while an unfinished task is carried on (resume/compact); otherwise it is stale.
+    const carryOn = (e.source === 'resume' || e.source === 'compact') && !!value && !value.isDone
+    if (!carryOn) await quiet(clearAgentsPaneHold($))
     // Sub-agents do not outlive a session.
     await $.state.set(runsRef, [])
     c.crew = []
@@ -819,6 +823,7 @@ export const register: Register = on => {
       await quiet(dashSetCubes($, board))
       await $.state.set(closedRef, false) // a new plan reopens a pane the person closed
       await openCubesPane($)
+      await quiet(openAgentsPaneForPlan($))
       await applyProgress($, c, { task, totalSteps: steps.length, step: 0, label: `${steps.length} cubes · ~${Math.round(total)} min`, done: false })
       try {
         $.ui.toast(`${steps.length} cubes waiting for approval — /tp-cubes`)
@@ -846,6 +851,9 @@ export const register: Register = on => {
     const plan: TaskPlanRecord = { task, steps, createdAt: await $.clock.now() }
     await $.state.set(planRef, plan)
     await quiet(dashPlan($, task, steps))
+    await $.state.set(closedRef, false) // a new plan reopens panes the person closed
+    await openCubesPane($)
+    await quiet(openAgentsPaneForPlan($))
     const total = steps.reduce((n, s) => n + s.minutes, 0)
     await applyProgress($, c, { task, totalSteps: steps.length, step: 0, label: `planned · ~${Math.round(total)} min`, done: false })
     const list = steps.map((s, i) => `${i + 1}. ${s.title} (${s.minutes}m)`).join('; ')

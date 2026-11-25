@@ -83,8 +83,28 @@ export async function autoOpenAgentsPane($: any): Promise<void> {
   if (await openPane($)) await $.state.set(autoRef, true)
 }
 
+/** A plan was recorded: reopen the pane (a new plan clears the person's close) and keep it open until the task is done. */
+export async function openAgentsPaneForPlan($: any): Promise<void> {
+  await $.state.set(closedRef, false)
+  await $.state.set({ plugin: 'task-progress', key: 'agentsPaneHold' }, true)
+  if ((await $.state.get(openRef)).value) return
+  if (await openPane($)) await $.state.set(autoRef, true)
+}
+
+/** The task was marked done: lift the hold and close the pane when it was ours and no agent runs. */
+export async function releaseAgentsPaneHold($: any): Promise<void> {
+  await $.state.set({ plugin: 'task-progress', key: 'agentsPaneHold' }, false)
+  await autoCloseAgentsPane($)
+}
+
+/** A session began without an unfinished task to carry on: drop a stale hold (never closes a pane). */
+export async function clearAgentsPaneHold($: any): Promise<void> {
+  await $.state.set({ plugin: 'task-progress', key: 'agentsPaneHold' }, false)
+}
+
 /** The done window ended: close the pane only if it was auto-opened and no agent runs again. */
 export async function autoCloseAgentsPane($: any): Promise<void> {
+  if ((await $.state.get({ plugin: 'task-progress', key: 'agentsPaneHold' })).value) return // a plan is still running: stay open until the task is done
   if (!(await $.state.get(autoRef)).value) return
   if (((await $.state.get({ plugin: 'task-progress', key: 'runs' })).value ?? []).length > 0) return
   await closePane($)

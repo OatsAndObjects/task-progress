@@ -87,7 +87,7 @@ test('a person close is remembered, another origin is not; a new plan reopens', 
   await start()
   await plan()
   await plan()
-  expect(opens.length).toBe(2)
+  expect(opens.filter(x => x.id === 'tp-cubes').length).toBe(2)
 })
 
 test('bare /tp-cubes and /tp-cubes panel open the pane', async ($, on) => {
